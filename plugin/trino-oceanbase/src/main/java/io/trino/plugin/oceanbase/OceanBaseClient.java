@@ -29,6 +29,7 @@ import io.trino.plugin.jdbc.JdbcColumnHandle;
 import io.trino.plugin.jdbc.JdbcExpression;
 import io.trino.plugin.jdbc.JdbcJoinCondition;
 import io.trino.plugin.jdbc.JdbcSortItem;
+import io.trino.plugin.jdbc.JdbcStatisticsConfig;
 import io.trino.plugin.jdbc.JdbcTableHandle;
 import io.trino.plugin.jdbc.JdbcTypeHandle;
 import io.trino.plugin.jdbc.LongReadFunction;
@@ -54,6 +55,8 @@ import io.trino.plugin.jdbc.aggregation.ImplementVariancePop;
 import io.trino.plugin.jdbc.aggregation.ImplementVarianceSamp;
 import io.trino.plugin.jdbc.expression.JdbcConnectorExpressionRewriterBuilder;
 import io.trino.plugin.jdbc.expression.ParameterizedExpression;
+import io.trino.plugin.jdbc.expression.RewriteLikeEscapeWithCaseSensitivity;
+import io.trino.plugin.jdbc.expression.RewriteLikeWithCaseSensitivity;
 import io.trino.plugin.jdbc.logging.RemoteQueryModifier;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.AggregateFunction;
@@ -209,26 +212,66 @@ public class OceanBaseClient
     private static final Set<String> INTERNAL_SCHEMAS = ImmutableSet.<String>builder().add("SYS").add("LBACSYS").add("ORAAUDITOR").build();
 
     private final OceanBaseCompatibleMode compatibleMode;
+    private final boolean statisticsEnabled;
     private final Type jsonType;
     private final ConnectorExpressionRewriter<ParameterizedExpression> connectorExpressionRewriter;
     private final AggregateFunctionRewriter<JdbcExpression, ?> aggregateFunctionRewriter;
 
     @Inject
-    public OceanBaseClient(BaseJdbcConfig config, OceanBaseConfig obConfig, ConnectionFactory connectionFactory, QueryBuilder queryBuilder, TypeManager typeManager, IdentifierMapping identifierMapping, RemoteQueryModifier queryModifier)
+    public OceanBaseClient(
+            BaseJdbcConfig config,
+            OceanBaseConfig obConfig,
+            JdbcStatisticsConfig statisticsConfig,
+            ConnectionFactory connectionFactory,
+            QueryBuilder queryBuilder,
+            TypeManager typeManager,
+            IdentifierMapping identifierMapping,
+            RemoteQueryModifier queryModifier)
     {
-        super(obConfig.getCompatibleMode().isMySQLMode() ? "`" : "\"", connectionFactory, queryBuilder, config.getJdbcTypesMappedToVarchar(), identifierMapping, queryModifier, true);
-
+        super("`", connectionFactory, queryBuilder, config.getJdbcTypesMappedToVarchar(), identifierMapping, queryModifier, true);
         this.compatibleMode = obConfig.getCompatibleMode();
-
         this.jsonType = typeManager.getType(new TypeSignature(StandardTypes.JSON));
+        this.statisticsEnabled = statisticsConfig.isEnabled();
 
-        this.connectorExpressionRewriter = JdbcConnectorExpressionRewriterBuilder.newBuilder().addStandardRules(this::quoted).withTypeClass("numeric_type", ImmutableSet.of("tinyint", "smallint", "integer", "bigint", "decimal", "real", "double")).map("$equal(left: numeric_type, right: numeric_type)").to("left = right").map("$not_equal(left: numeric_type, right: numeric_type)").to("left <> right").map("$less_than(left: numeric_type, right: numeric_type)").to("left < right").map("$less_than_or_equal(left: numeric_type, right: numeric_type)").to("left <= right").map("$greater_than(left: numeric_type, right: numeric_type)").to("left > right").map("$greater_than_or_equal(left: numeric_type, right: numeric_type)").to("left >= right").build();
+        this.connectorExpressionRewriter = JdbcConnectorExpressionRewriterBuilder
+                .newBuilder()
+                .addStandardRules(this::quoted)
+                .withTypeClass("numeric_type",
+                        ImmutableSet.of("tinyint", "smallint", "integer", "bigint", "decimal", "real", "double"))
+                .map("$equal(left: numeric_type, right: numeric_type)")
+                .to("left = right")
+                .map("$not_equal(left: numeric_type, right: numeric_type)")
+                .to("left <> right")
+                .map("$less_than(left: numeric_type, right: numeric_type)")
+                .to("left < right")
+                .map("$less_than_or_equal(left: numeric_type, right: numeric_type)")
+                .to("left <= right")
+                .map("$greater_than(left: numeric_type, right: numeric_type)")
+                .to("left > right")
+                .map("$greater_than_or_equal(left: numeric_type, right: numeric_type)")
+                .to("left >= right").build();
 
         JdbcTypeHandle bigintTypeHandle = new JdbcTypeHandle(Types.BIGINT, Optional.of("bigint"), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
-        this.aggregateFunctionRewriter = new AggregateFunctionRewriter<>(connectorExpressionRewriter, ImmutableSet.<AggregateFunctionRule<JdbcExpression, ParameterizedExpression>>builder().add(new ImplementCountAll(bigintTypeHandle)).add(new ImplementCount(bigintTypeHandle)).add(new ImplementCountDistinct(bigintTypeHandle, true)).add(new ImplementMinMax(true)).add(new ImplementSum(this::toTypeHandle)).add(new ImplementAvgFloatingPoint()).add(new ImplementAvgDecimal()).add(new ImplementStddevSamp()).add(new ImplementStddevPop()).add(new ImplementVarianceSamp()).add(new ImplementVariancePop()).add(new ImplementCovarianceSamp()).add(new ImplementCovariancePop()).build());
+        this.aggregateFunctionRewriter = new AggregateFunctionRewriter<>
+                (connectorExpressionRewriter, ImmutableSet
+                        .<AggregateFunctionRule<JdbcExpression, ParameterizedExpression>>builder()
+                        .add(new ImplementCountAll(bigintTypeHandle))
+                        .add(new ImplementCount(bigintTypeHandle))
+                        .add(new ImplementCountDistinct(bigintTypeHandle, true))
+                        .add(new ImplementMinMax(true))
+                        .add(new ImplementSum(this::toTypeHandle))
+                        .add(new ImplementAvgFloatingPoint())
+                        .add(new ImplementAvgDecimal())
+                        .add(new ImplementStddevSamp())
+                        .add(new ImplementStddevPop())
+                        .add(new ImplementVarianceSamp())
+                        .add(new ImplementVariancePop())
+                        .add(new ImplementCovarianceSamp())
+                        .add(new ImplementCovariancePop())
+                        .build());
     }
 
-    private Optional<JdbcTypeHandle> toTypeHandle(DecimalType decimalType)
+    private  Optional<JdbcTypeHandle> toTypeHandle(DecimalType decimalType)
     {
         return Optional.of(new JdbcTypeHandle(Types.NUMERIC, Optional.of("decimal"), Optional.of(decimalType.getPrecision()), Optional.of(decimalType.getScale()), Optional.empty(), Optional.empty()));
     }

@@ -16,6 +16,7 @@ package io.trino.plugin.oceanbase;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.ZoneId;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,6 +31,13 @@ public class TestingOceanBaseServer extends OceanBaseMySQLTestBase
     public TestingOceanBaseServer()
     {
         CONTAINER.withLogConsumer(new Slf4jLogConsumer(LOG)).start();
+    }
+
+    public TestingOceanBaseServer(ZoneId zoneId)
+    {
+        CONTAINER
+                .withEnv("TZ",zoneId.getId())
+                .withLogConsumer(new Slf4jLogConsumer(LOG)).start();
     }
 
 

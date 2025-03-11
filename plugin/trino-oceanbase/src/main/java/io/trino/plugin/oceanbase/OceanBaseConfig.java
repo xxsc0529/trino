@@ -16,11 +16,15 @@ package io.trino.plugin.oceanbase;
 import io.airlift.configuration.Config;
 import io.airlift.configuration.ConfigDescription;
 import io.airlift.units.Duration;
+import io.trino.plugin.jdbc.BaseJdbcConfig;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Min;
 
 import java.util.concurrent.TimeUnit;
 
-public class OceanBaseConfig
+import static com.google.common.base.Strings.isNullOrEmpty;
+
+public class OceanBaseConfig extends BaseJdbcConfig
 {
     private OceanBaseCompatibleMode compatibleMode = OceanBaseCompatibleMode.MySQL;
     private boolean autoReconnect = true;
