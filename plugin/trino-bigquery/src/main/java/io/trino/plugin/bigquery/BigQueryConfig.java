@@ -39,6 +39,7 @@ public class BigQueryConfig
     public static final int DEFAULT_MAX_READ_ROWS_RETRIES = 3;
     public static final String VIEWS_ENABLED = "bigquery.views-enabled";
     public static final String ARROW_SERIALIZATION_ENABLED = "bigquery.arrow-serialization.enabled";
+    private static final int MAX_METADATA_PARALLELISM = 32;
 
     private Optional<String> projectId = Optional.empty();
     private Optional<String> parentProjectId = Optional.empty();
@@ -63,7 +64,8 @@ public class BigQueryConfig
     private String queryLabelFormat;
     private boolean proxyEnabled;
     private boolean projectionPushDownEnabled = true;
-    private int metadataParallelism = Runtime.getRuntime().availableProcessors();
+    private int metadataParallelism = Math.min(Runtime.getRuntime().availableProcessors(), MAX_METADATA_PARALLELISM);
+    private Optional<Integer> maxParallelism = Optional.empty();
 
     public Optional<String> getProjectId()
     {
@@ -370,7 +372,7 @@ public class BigQueryConfig
     }
 
     @Min(1)
-    @Max(32)
+    @Max(MAX_METADATA_PARALLELISM)
     public int getMetadataParallelism()
     {
         return metadataParallelism;
@@ -384,6 +386,20 @@ public class BigQueryConfig
         return this;
     }
 
+    @NotNull
+    public Optional<@Min(1) Integer> getMaxParallelism()
+    {
+        return maxParallelism;
+    }
+
+    @Config("bigquery.max-parallelism")
+    @ConfigDescription("The max number of partitions to split the data into")
+    public BigQueryConfig setMaxParallelism(Integer maxParallelism)
+    {
+        this.maxParallelism = Optional.ofNullable(maxParallelism);
+        return this;
+    }
+
     @AssertTrue(message = "View expiration duration must be longer than view cache TTL")
     public boolean isValidViewExpireDuration()
     {
@@ -391,7 +407,7 @@ public class BigQueryConfig
     }
 
     @AssertTrue(message = VIEWS_ENABLED + " config property must be enabled when bigquery.skip-view-materialization is enabled")
-    public boolean isValidViewsWehnEnabledSkipViewMaterialization()
+    public boolean isValidViewsWhenEnabledSkipViewMaterialization()
     {
         return !skipViewMaterialization || viewsEnabled;
     }

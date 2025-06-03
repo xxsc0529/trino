@@ -43,10 +43,10 @@ import io.trino.plugin.iceberg.catalog.TrinoCatalog;
 import io.trino.plugin.iceberg.catalog.file.FileMetastoreTableOperationsProvider;
 import io.trino.plugin.iceberg.catalog.hms.TrinoHiveCatalog;
 import io.trino.plugin.iceberg.fileio.ForwardingInputFile;
-import io.trino.spi.Page;
 import io.trino.spi.block.Block;
 import io.trino.spi.catalog.CatalogName;
 import io.trino.spi.connector.SchemaTableName;
+import io.trino.spi.connector.SourcePage;
 import io.trino.spi.type.TestingTypeManager;
 import io.trino.spi.type.Type;
 import io.trino.testing.QueryRunner;
@@ -115,14 +115,15 @@ public final class IcebergTestUtils
             try (OrcRecordReader recordReader = orcReader.createRecordReader(
                     List.of(sortColumn),
                     List.of(sortColumnType),
+                    false,
                     OrcPredicate.TRUE,
                     UTC,
                     newSimpleAggregatedMemoryContext(),
                     INITIAL_BATCH_SIZE,
                     RuntimeException::new)) {
                 Comparable<Object> previousMax = null;
-                for (Page page = recordReader.nextPage(); page != null; page = recordReader.nextPage()) {
-                    Block block = page.getLoadedPage().getBlock(0);
+                for (SourcePage page = recordReader.nextPage(); page != null; page = recordReader.nextPage()) {
+                    Block block = page.getBlock(0);
                     for (int position = 0; position < block.getPositionCount(); position++) {
                         Comparable<Object> current = (Comparable<Object>) readNativeValue(sortColumnType, block, position);
                         if (previousMax != null && previousMax.compareTo(current) > 0) {
@@ -195,8 +196,18 @@ public final class IcebergTestUtils
             String schemaName)
     {
         IcebergTableOperationsProvider tableOperationsProvider = new FileMetastoreTableOperationsProvider(fileSystemFactory);
+        TrinoCatalog catalog = getTrinoCatalog(metastore, fileSystemFactory, catalogName);
+        return loadIcebergTable(catalog, tableOperationsProvider, SESSION, new SchemaTableName(schemaName, tableName));
+    }
+
+    public static TrinoCatalog getTrinoCatalog(
+            HiveMetastore metastore,
+            TrinoFileSystemFactory fileSystemFactory,
+            String catalogName)
+    {
+        IcebergTableOperationsProvider tableOperationsProvider = new FileMetastoreTableOperationsProvider(fileSystemFactory);
         CachingHiveMetastore cachingHiveMetastore = createPerTransactionCache(metastore, 1000);
-        TrinoCatalog catalog = new TrinoHiveCatalog(
+        return new TrinoHiveCatalog(
                 new CatalogName(catalogName),
                 cachingHiveMetastore,
                 new TrinoViewHiveMetastore(cachingHiveMetastore, false, "trino-version", "test"),
@@ -208,7 +219,6 @@ public final class IcebergTestUtils
                 false,
                 new IcebergConfig().isHideMaterializedViewStorageTable(),
                 directExecutor());
-        return loadIcebergTable(catalog, tableOperationsProvider, SESSION, new SchemaTableName(schemaName, tableName));
     }
 
     public static Map<String, Long> getMetadataFileAndUpdatedMillis(TrinoFileSystem trinoFileSystem, String tableLocation)
@@ -230,7 +240,7 @@ public final class IcebergTestUtils
     {
         try {
             return MetadataReader.readFooter(
-                    new TrinoParquetDataSource(inputFile, new ParquetReaderOptions(), new FileFormatDataSourceStats()),
+                    new TrinoParquetDataSource(inputFile, ParquetReaderOptions.defaultOptions(), new FileFormatDataSourceStats()),
                     Optional.empty());
         }
         catch (IOException e) {

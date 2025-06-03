@@ -16,12 +16,6 @@
         </artifact>
     </artifactSet>
 
-    <artifactSet to="plugin/apache-ranger">
-        <artifact id="${project.groupId}:trino-ranger:zip:${project.version}">
-            <unpack />
-        </artifact>
-    </artifactSet>
-
     <artifactSet to="plugin/bigquery">
         <artifact id="${project.groupId}:trino-bigquery:zip:${project.version}">
             <unpack />
@@ -69,12 +63,6 @@
 
     <artifactSet to="plugin/elasticsearch">
         <artifact id="${project.groupId}:trino-elasticsearch:zip:${project.version}">
-            <unpack />
-        </artifact>
-    </artifactSet>
-
-    <artifactSet to="plugin/example-http">
-        <artifact id="${project.groupId}:trino-example-http:zip:${project.version}">
             <unpack />
         </artifact>
     </artifactSet>
@@ -166,14 +154,14 @@
         </artifact>
     </artifactSet>
 
-    <artifactSet to="plugin/kudu">
-        <artifact id="${project.groupId}:trino-kudu:zip:${project.version}">
+    <artifactSet to="plugin/loki">
+        <artifact id="${project.groupId}:trino-loki:zip:${project.version}">
             <unpack />
         </artifact>
     </artifactSet>
 
-    <artifactSet to="plugin/loki">
-        <artifact id="${project.groupId}:trino-loki:zip:${project.version}">
+    <artifactSet to="plugin/ldap-group-provider">
+        <artifact id="${project.groupId}:trino-ldap-group-provider:zip:${project.version}">
             <unpack />
         </artifact>
     </artifactSet>
@@ -244,12 +232,6 @@
         </artifact>
     </artifactSet>
 
-    <artifactSet to="plugin/phoenix5">
-        <artifact id="${project.groupId}:trino-phoenix5:zip:${project.version}">
-            <unpack />
-        </artifact>
-    </artifactSet>
-
     <artifactSet to="plugin/pinot">
         <artifact id="${project.groupId}:trino-pinot:zip:${project.version}">
             <unpack />
@@ -267,6 +249,13 @@
             <unpack />
         </artifact>
     </artifactSet>
+
+    <artifactSet to="plugin/ranger">
+        <artifact id="${project.groupId}:trino-ranger:zip:${project.version}">
+            <unpack />
+        </artifact>
+    </artifactSet>
+
 
     <artifactSet to="plugin/redis">
         <artifact id="${project.groupId}:trino-redis:zip:${project.version}">
