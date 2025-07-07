@@ -323,6 +323,7 @@ import static io.trino.spi.StandardErrorCode.EXPRESSION_NOT_IN_DISTINCT;
 import static io.trino.spi.StandardErrorCode.FUNCTION_IMPLEMENTATION_ERROR;
 import static io.trino.spi.StandardErrorCode.FUNCTION_NOT_FOUND;
 import static io.trino.spi.StandardErrorCode.FUNCTION_NOT_WINDOW;
+import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.trino.spi.StandardErrorCode.INVALID_ARGUMENTS;
 import static io.trino.spi.StandardErrorCode.INVALID_CATALOG_PROPERTY;
 import static io.trino.spi.StandardErrorCode.INVALID_CHECK_CONSTRAINT;
@@ -382,6 +383,7 @@ import static io.trino.spi.type.TinyintType.TINYINT;
 import static io.trino.spi.type.VarcharType.VARCHAR;
 import static io.trino.spi.type.VarcharType.createUnboundedVarcharType;
 import static io.trino.sql.NodeUtils.getSortItemsFromOrderBy;
+import static io.trino.sql.analyzer.AggregationAnalyzer.containsAggregation;
 import static io.trino.sql.analyzer.AggregationAnalyzer.verifyOrderByAggregations;
 import static io.trino.sql.analyzer.AggregationAnalyzer.verifySourceAggregations;
 import static io.trino.sql.analyzer.Analyzer.verifyNoAggregateWindowOrGroupingFunctions;
@@ -3766,7 +3768,18 @@ class StatementAnalyzer
             List<ColumnHandle> redistributionColumnHandles = redistributionColumnHandlesBuilder.build();
 
             List<Integer> insertPartitioningArgumentIndexes = partitioningColumnNames.stream()
-                    .map(fieldIndexes::get)
+                    .map(partitioningColumnName -> {
+                        Integer value = fieldIndexes.get(partitioningColumnName);
+                        // This shouldn't happen, as the connector should only return partitioning columns that are present in the
+                        // table schema, but validation is performed here to avoid NPEs in case of a bug in the connector
+                        if (value == null) {
+                            throw new TrinoException(GENERIC_INTERNAL_ERROR, format(
+                                    "Unable to determine field index for partitioning column '%s' (available columns: [%s])",
+                                    partitioningColumnName,
+                                    fieldIndexes.keySet().stream().map(key -> format("'%s'", key)).collect(Collectors.joining(", "))));
+                        }
+                        return value;
+                    })
                     .collect(toImmutableList());
 
             Set<ColumnHandle> nonNullableColumnHandles = metadata.getTableMetadata(session, handle).columns().stream()
@@ -4557,16 +4570,11 @@ class StatementAnalyzer
                     else if (groupingElement instanceof AutoGroupBy) {
                         // Analyze non-aggregation outputs
                         for (Expression column : outputExpressions) {
-                            if (column instanceof FunctionCall functionCall) {
-                                ResolvedFunction function = getResolvedFunction(functionCall);
-                                if (function.functionKind() == AGGREGATE) {
-                                    continue;
-                                }
+                            if (containsAggregation(column, this::getResolvedFunction)) {
+                                continue;
                             }
-                            else {
-                                verifyNoAggregateWindowOrGroupingFunctions(session, functionResolver, accessControl, column, "GROUP BY clause");
-                                analyzeExpression(column, scope);
-                            }
+                            verifyNoAggregateWindowOrGroupingFunctions(session, functionResolver, accessControl, column, "GROUP BY clause");
+                            analyzeExpression(column, scope);
 
                             ResolvedField field = analysis.getColumnReferenceFields().get(NodeRef.of(column));
                             if (field != null) {
