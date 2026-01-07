@@ -19,6 +19,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.inject.Inject;
 import io.airlift.slice.XxHash64;
 import io.trino.Session;
+import io.trino.connector.CatalogHandle;
 import io.trino.connector.CatalogServiceProvider;
 import io.trino.execution.scheduler.BucketNodeMap;
 import io.trino.execution.scheduler.NodeScheduler;
@@ -26,7 +27,6 @@ import io.trino.execution.scheduler.NodeSelector;
 import io.trino.metadata.Split;
 import io.trino.node.InternalNode;
 import io.trino.operator.RetryPolicy;
-import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.ConnectorBucketNodeMap;
 import io.trino.spi.connector.ConnectorNodePartitioningProvider;
 import io.trino.spi.connector.ConnectorPartitioningHandle;
@@ -39,6 +39,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.ToIntFunction;
@@ -172,19 +173,26 @@ public class NodePartitioningManager
         return nodes;
     }
 
-    public Optional<Integer> getBucketCount(Session session, PartitioningHandle partitioningHandle)
+    public OptionalInt getBucketCount(Session session, PartitioningHandle partitioningHandle)
     {
         if (partitioningHandle.getConnectorHandle() instanceof SystemPartitioningHandle) {
-            return Optional.empty();
+            return OptionalInt.empty();
         }
 
         ConnectorPartitioningHandle connectorHandle = partitioningHandle.getConnectorHandle();
         if (connectorHandle instanceof MergePartitioningHandle mergeHandle) {
-            return mergeHandle.getBucketCount(handle -> getBucketCount(session, handle))
-                    .or(() -> Optional.of(getDefaultBucketCount(session)));
+            OptionalInt mergeBucketCount = mergeHandle.getBucketCount(handle -> getBucketCount(session, handle));
+            if (mergeBucketCount.isPresent()) {
+                return mergeBucketCount;
+            }
+            return OptionalInt.of(getDefaultBucketCount(session));
         }
+
         Optional<ConnectorBucketNodeMap> bucketNodeMap = getConnectorBucketNodeMap(session, partitioningHandle);
-        return Optional.of(bucketNodeMap.map(ConnectorBucketNodeMap::getBucketCount).orElseGet(() -> getDefaultBucketCount(session)));
+        if (bucketNodeMap.isPresent()) {
+            return OptionalInt.of(bucketNodeMap.get().getBucketCount());
+        }
+        return OptionalInt.of(getDefaultBucketCount(session));
     }
 
     public BucketNodeMap getBucketNodeMap(Session session, PartitioningHandle partitioningHandle, int partitionCount)

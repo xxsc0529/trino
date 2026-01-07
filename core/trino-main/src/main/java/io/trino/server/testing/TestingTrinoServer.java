@@ -41,6 +41,7 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.sdk.trace.SpanProcessor;
 import io.trino.Session;
 import io.trino.SystemSessionPropertiesProvider;
+import io.trino.connector.CatalogHandle;
 import io.trino.connector.CatalogManagerConfig.CatalogMangerKind;
 import io.trino.connector.CatalogManagerModule;
 import io.trino.connector.CatalogStoreManager;
@@ -49,12 +50,12 @@ import io.trino.cost.StatsCalculator;
 import io.trino.dispatcher.DispatchManager;
 import io.trino.eventlistener.EventListenerConfig;
 import io.trino.eventlistener.EventListenerManager;
+import io.trino.exchange.ExchangeManagerConfig;
 import io.trino.exchange.ExchangeManagerRegistry;
 import io.trino.execution.FailureInjector;
 import io.trino.execution.FailureInjector.InjectedFailureType;
 import io.trino.execution.QueryInfo;
 import io.trino.execution.QueryManager;
-import io.trino.execution.SqlQueryManager;
 import io.trino.execution.SqlTaskManager;
 import io.trino.execution.StateMachine.StateChangeListener;
 import io.trino.execution.resourcegroups.InternalResourceGroupManager;
@@ -91,7 +92,6 @@ import io.trino.spi.ErrorType;
 import io.trino.spi.Plugin;
 import io.trino.spi.QueryId;
 import io.trino.spi.catalog.CatalogName;
-import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.Connector;
 import io.trino.spi.connector.ConnectorName;
 import io.trino.spi.eventlistener.EventListener;
@@ -149,6 +149,7 @@ import static java.lang.Integer.parseInt;
 import static java.nio.file.Files.createTempDirectory;
 import static java.nio.file.Files.isDirectory;
 import static java.util.Objects.requireNonNull;
+import static java.util.UUID.randomUUID;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 public class TestingTrinoServer
@@ -178,6 +179,7 @@ public class TestingTrinoServer
         return new Builder();
     }
 
+    private final String instanceId;
     private final Injector injector;
     private final Path baseDataDir;
     private final boolean preserveData;
@@ -205,7 +207,7 @@ public class TestingTrinoServer
     private final LocalMemoryManager localMemoryManager;
     private final InternalNodeManager nodeManager;
     private final DispatchManager dispatchManager;
-    private final SqlQueryManager queryManager;
+    private final QueryManager queryManager;
     private final SqlTaskManager taskManager;
     private final NodeStateManager nodeStateManager;
     private final ShutdownAction shutdownAction;
@@ -256,6 +258,7 @@ public class TestingTrinoServer
             Consumer<TestingTrinoServer> additionalConfiguration,
             CatalogMangerKind catalogMangerKind)
     {
+        this.instanceId = randomUUID().toString();
         this.coordinator = coordinator;
 
         this.baseDataDir = baseDataDir.orElseGet(TestingTrinoServer::tempDirectory);
@@ -275,7 +278,10 @@ public class TestingTrinoServer
                 .put("exchange.client-threads", "4")
                 // Reduce memory footprint in tests
                 .put("exchange.max-buffer-size", "4MB")
-                .put("internal-communication.shared-secret", "internal-shared-secret");
+                .put("internal-communication.shared-secret", "internal-shared-secret")
+                .put("plugin.dir", baseDataDir
+                        .orElseGet(TestingTrinoServer::tempDirectory)
+                        .toString());
 
         if (coordinator) {
             if (catalogMangerKind == CatalogMangerKind.DYNAMIC) {
@@ -293,7 +299,7 @@ public class TestingTrinoServer
 
         ImmutableList.Builder<Module> modules = ImmutableList.<Module>builder()
                 .add(new TestingNodeModule(environment))
-                .add(new TestingHttpServerModule(httpPort))
+                .add(new TestingHttpServerModule("testing-trino-" + instanceId, httpPort))
                 .add(new JsonModule())
                 .add(new JaxrsModule())
                 .add(new MBeanModule())
@@ -312,6 +318,7 @@ public class TestingTrinoServer
                             .addBinding()
                             .to(TracingServletFilter.class);
                     binder.bind(EventListenerConfig.class).in(Scopes.SINGLETON);
+                    binder.bind(ExchangeManagerConfig.class).in(Scopes.SINGLETON);
                     binder.bind(AccessControlConfig.class).in(Scopes.SINGLETON);
                     binder.bind(TestingAccessControlManager.class).in(Scopes.SINGLETON);
                     binder.bind(TestingGroupProvider.class).in(Scopes.SINGLETON);
@@ -346,13 +353,9 @@ public class TestingTrinoServer
                     }
                 });
 
-        if (coordinator) {
-            modules.add(new TestingSessionTimeModule());
-        }
-
         modules.add(additionalModule);
 
-        Bootstrap app = new Bootstrap(modules.build());
+        Bootstrap app = new Bootstrap("io.trino.bootstrap.engine", modules.build());
 
         Map<String, String> optionalProperties = new HashMap<>();
         environment.ifPresent(env -> optionalProperties.put("node.environment", env));
@@ -394,7 +397,7 @@ public class TestingTrinoServer
         sessionPropertyManager = injector.getInstance(SessionPropertyManager.class);
         if (coordinator) {
             dispatchManager = injector.getInstance(DispatchManager.class);
-            queryManager = (SqlQueryManager) injector.getInstance(QueryManager.class);
+            queryManager = injector.getInstance(QueryManager.class);
             queryExplainer = injector.getInstance(QueryExplainerFactory.class)
                     .createQueryExplainer(injector.getInstance(AnalyzerFactory.class));
             resourceGroupManager = Optional.of((InternalResourceGroupManager<?>) injector.getInstance(InternalResourceGroupManager.class));
@@ -755,6 +758,19 @@ public class TestingTrinoServer
                     .putAll(properties)
                     .put(name, value)
                     .buildOrThrow();
+            return this;
+        }
+
+        public Builder overrideProperties(Map<String, String> properties)
+        {
+            ImmutableMap.Builder<String, String> builder = ImmutableMap.builder();
+            this.properties.forEach((k, v) -> {
+                if (!properties.containsKey(k)) {
+                    builder.put(k, v);
+                }
+            });
+            builder.putAll(properties);
+            this.properties = builder.buildOrThrow();
             return this;
         }
 

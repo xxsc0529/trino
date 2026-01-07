@@ -17,9 +17,11 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.trino.Session;
 import io.trino.client.NodeVersion;
+import io.trino.connector.CatalogHandle;
 import io.trino.connector.CatalogServiceProvider;
 import io.trino.connector.MockConnectorFactory;
 import io.trino.connector.MockConnectorPlugin;
+import io.trino.connector.TestingColumnHandle;
 import io.trino.execution.warnings.WarningCollector;
 import io.trino.metadata.AbstractMockMetadata;
 import io.trino.metadata.ColumnPropertyManager;
@@ -38,7 +40,6 @@ import io.trino.security.AccessControl;
 import io.trino.security.AllowAllAccessControl;
 import io.trino.spi.TrinoException;
 import io.trino.spi.catalog.CatalogName;
-import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.CatalogSchemaName;
 import io.trino.spi.connector.CatalogSchemaTableName;
 import io.trino.spi.connector.ColumnHandle;
@@ -47,7 +48,6 @@ import io.trino.spi.connector.ColumnPosition;
 import io.trino.spi.connector.ConnectorTableMetadata;
 import io.trino.spi.connector.SaveMode;
 import io.trino.spi.connector.SchemaTableName;
-import io.trino.spi.connector.TestingColumnHandle;
 import io.trino.spi.function.OperatorType;
 import io.trino.spi.resourcegroups.ResourceGroupId;
 import io.trino.spi.security.Identity;
@@ -88,9 +88,12 @@ import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static io.trino.execution.querystats.PlanOptimizersStatsCollector.createPlanOptimizersStatsCollector;
 import static io.trino.metadata.TestMetadataManager.createTestMetadataManager;
 import static io.trino.spi.StandardErrorCode.ALREADY_EXISTS;
+import static io.trino.spi.StandardErrorCode.BRANCH_NOT_FOUND;
 import static io.trino.spi.StandardErrorCode.DIVISION_BY_ZERO;
+import static io.trino.spi.connector.ConnectorMaterializedViewDefinition.WhenStaleBehavior.INLINE;
 import static io.trino.spi.connector.SaveMode.IGNORE;
 import static io.trino.spi.connector.SaveMode.REPLACE;
+import static io.trino.spi.security.PrincipalType.ROLE;
 import static io.trino.spi.session.PropertyMetadata.longProperty;
 import static io.trino.spi.session.PropertyMetadata.stringProperty;
 import static io.trino.spi.type.BigintType.BIGINT;
@@ -146,6 +149,7 @@ public abstract class BaseDataDefinitionTaskTest
                 MATERIALIZED_VIEW_PROPERTY_2_NAME, stringProperty(MATERIALIZED_VIEW_PROPERTY_2_NAME, "property 2", MATERIALIZED_VIEW_PROPERTY_2_DEFAULT_VALUE, false));
         materializedViewPropertyManager = new MaterializedViewPropertyManager(CatalogServiceProvider.singleton(TEST_CATALOG_HANDLE, properties));
         queryStateMachine = stateMachine(transactionManager, createTestMetadataManager(), new AllowAllAccessControl(), testSession);
+        metadata.createSchema(testSession, new CatalogSchemaName(TEST_CATALOG_NAME, SCHEMA), ImmutableMap.of(), new TrinoPrincipal(ROLE, "role"));
     }
 
     @AfterEach
@@ -201,6 +205,7 @@ public abstract class BaseDataDefinitionTaskTest
                 Optional.empty(),
                 columns,
                 Optional.empty(),
+                INLINE,
                 Optional.empty(),
                 Identity.ofUser("owner"),
                 ImmutableList.of(),
@@ -433,6 +438,44 @@ public abstract class BaseDataDefinitionTaskTest
         }
 
         @Override
+        public void setDefaultValue(Session session, TableHandle tableHandle, ColumnHandle columnHandle, String defaultValue)
+        {
+            SchemaTableName tableName = getTableName(tableHandle);
+            ConnectorTableMetadata metadata = tables.get(tableName).metadata;
+
+            ImmutableList.Builder<ColumnMetadata> columns = ImmutableList.builderWithExpectedSize(metadata.getColumns().size());
+            for (ColumnMetadata column : metadata.getColumns()) {
+                if (column.getName().equals(((TestingColumnHandle) columnHandle).getName())) {
+                    columns.add(ColumnMetadata.builderFrom(column).setDefaultValue(Optional.of(defaultValue)).build());
+                }
+                else {
+                    columns.add(column);
+                }
+            }
+
+            tables.put(tableName, new MockConnectorTableMetadata(new ConnectorTableMetadata(tableName, columns.build())));
+        }
+
+        @Override
+        public void dropDefaultValue(Session session, TableHandle tableHandle, ColumnHandle columnHandle)
+        {
+            SchemaTableName tableName = getTableName(tableHandle);
+            ConnectorTableMetadata metadata = tables.get(tableName).metadata;
+
+            ImmutableList.Builder<ColumnMetadata> columns = ImmutableList.builderWithExpectedSize(metadata.getColumns().size());
+            for (ColumnMetadata column : metadata.getColumns()) {
+                if (column.getName().equals(((TestingColumnHandle) columnHandle).getName())) {
+                    columns.add(ColumnMetadata.builderFrom(column).setDefaultValue(Optional.empty()).build());
+                }
+                else {
+                    columns.add(column);
+                }
+            }
+
+            tables.put(tableName, new MockConnectorTableMetadata(new ConnectorTableMetadata(tableName, columns.build())));
+        }
+
+        @Override
         public void setColumnType(Session session, TableHandle tableHandle, ColumnHandle columnHandle, Type type)
         {
             SchemaTableName tableName = getTableName(tableHandle);
@@ -550,6 +593,7 @@ public abstract class BaseDataDefinitionTaskTest
                                     .map(currentViewColumn -> columnName.equals(currentViewColumn.name()) ? new ViewColumn(currentViewColumn.name(), currentViewColumn.type(), comment) : currentViewColumn)
                                     .collect(toImmutableList()),
                             view.getGracePeriod(),
+                            view.getWhenStaleBehavior(),
                             view.getComment(),
                             view.getRunAsIdentity().get(),
                             view.getPath(),
@@ -593,6 +637,12 @@ public abstract class BaseDataDefinitionTaskTest
             SchemaTableName oldViewName = source.asSchemaTableName();
             views.put(target.asSchemaTableName(), verifyNotNull(views.get(oldViewName), "View not found %s", oldViewName));
             views.remove(oldViewName);
+        }
+
+        @Override
+        public void refreshView(Session session, QualifiedObjectName viewName, ViewDefinition viewDefinition)
+        {
+            views.replace(viewName.asSchemaTableName(), viewDefinition);
         }
 
         @Override
@@ -671,11 +721,16 @@ public abstract class BaseDataDefinitionTaskTest
         }
 
         @Override
-        public void createBranch(Session session, TableHandle tableHandle, String branch, SaveMode saveMode, Map<String, Object> properties)
+        public void createBranch(Session session, TableHandle tableHandle, String branch, Optional<String> fromBranch, SaveMode saveMode, Map<String, Object> properties)
         {
             SchemaTableName tableName = getTableName(tableHandle);
             MockConnectorTableMetadata table = tables.get(tableName);
             requireNonNull(table, "table is null");
+            fromBranch.ifPresent(name -> {
+                if (!table.branches.contains(name)) {
+                    throw new TrinoException(BRANCH_NOT_FOUND, "Branch '%s' does not exist".formatted(name));
+                }
+            });
             tables.put(tableName, table.addBranch(branch));
         }
 

@@ -54,10 +54,11 @@ public class MockManagedQueryExecution
 
     private DataSize memoryUsage;
     private Duration cpuUsage;
+    private DataSize physicalInputDataUsage;
     private QueryState state = QUEUED;
     private Throwable failureCause;
 
-    private MockManagedQueryExecution(String queryId, int priority, DataSize memoryUsage, Duration cpuUsage)
+    private MockManagedQueryExecution(String queryId, int priority, DataSize memoryUsage, Duration cpuUsage, DataSize physicalInputDataUsage)
     {
         requireNonNull(queryId, "queryId is null");
         this.session = testSessionBuilder()
@@ -67,6 +68,7 @@ public class MockManagedQueryExecution
 
         this.memoryUsage = requireNonNull(memoryUsage, "memoryUsage is null");
         this.cpuUsage = requireNonNull(cpuUsage, "cpuUsage is null");
+        this.physicalInputDataUsage = requireNonNull(physicalInputDataUsage, "physicalInputDataUsage is null");
     }
 
     public void consumeCpuTimeMillis(long cpuTimeDeltaMillis)
@@ -80,6 +82,13 @@ public class MockManagedQueryExecution
     {
         checkState(state == RUNNING, "cannot set memory usage in a non-running state");
         this.memoryUsage = memoryUsage;
+    }
+
+    public void consumePhysicalInputDataBytes(long physicalInputDataBytes)
+    {
+        checkState(state == RUNNING, "cannot set physical input data usage in a non-running state");
+        long newDataScan = physicalInputDataUsage.toBytes() + physicalInputDataBytes;
+        this.physicalInputDataUsage = DataSize.ofBytes(newDataScan);
     }
 
     public void complete()
@@ -125,16 +134,16 @@ public class MockManagedQueryExecution
                         new Duration(3, NANOSECONDS),
                         new Duration(4, NANOSECONDS),
                         new Duration(5, NANOSECONDS),
+                        new Duration(6, NANOSECONDS),
                         99,
                         6,
                         7,
                         8,
                         9,
                         5,
-                        DataSize.ofBytes(14),
                         15,
                         DataSize.ofBytes(13),
-                        DataSize.ofBytes(13),
+                        physicalInputDataUsage,
                         DataSize.ofBytes(13),
                         DataSize.ofBytes(13),
                         16.0,
@@ -225,7 +234,7 @@ public class MockManagedQueryExecution
                         false,
                         ImmutableSet.of(),
 
-                        DataSize.ofBytes(241),
+                        physicalInputDataUsage,
                         DataSize.ofBytes(0),
                         251,
                         0,
@@ -235,11 +244,6 @@ public class MockManagedQueryExecution
                         DataSize.ofBytes(242),
                         DataSize.ofBytes(0),
                         252,
-                        0,
-
-                        DataSize.ofBytes(25),
-                        DataSize.ofBytes(0),
-                        26,
                         0,
 
                         DataSize.ofBytes(27),
@@ -263,6 +267,7 @@ public class MockManagedQueryExecution
 
                         ImmutableList.of(),
                         DynamicFiltersStats.EMPTY,
+                        ImmutableMap.of(),
                         ImmutableList.of(),
                         ImmutableList.of()),
                 Optional.empty(),
@@ -284,6 +289,7 @@ public class MockManagedQueryExecution
                 null,
                 ImmutableList.of(),
                 ImmutableSet.of(),
+                Optional.empty(),
                 Optional.empty(),
                 ImmutableList.of(),
                 ImmutableList.of(),
@@ -358,6 +364,7 @@ public class MockManagedQueryExecution
     {
         private DataSize memoryUsage = DataSize.ofBytes(0);
         private Duration cpuUsage = new Duration(0, MILLISECONDS);
+        private DataSize physicalInputDataUsage = DataSize.ofBytes(0);
         private int priority = 1;
         private String queryId = "query_id";
 
@@ -375,6 +382,12 @@ public class MockManagedQueryExecution
             return this;
         }
 
+        public MockManagedQueryExecutionBuilder withInitialPhysicalInputDataUsage(long physicalInputDataUsageBytes)
+        {
+            this.physicalInputDataUsage = DataSize.ofBytes(physicalInputDataUsageBytes);
+            return this;
+        }
+
         public MockManagedQueryExecutionBuilder withPriority(int priority)
         {
             this.priority = priority;
@@ -389,7 +402,7 @@ public class MockManagedQueryExecution
 
         public MockManagedQueryExecution build()
         {
-            return new MockManagedQueryExecution(queryId, priority, memoryUsage, cpuUsage);
+            return new MockManagedQueryExecution(queryId, priority, memoryUsage, cpuUsage, physicalInputDataUsage);
         }
     }
 }

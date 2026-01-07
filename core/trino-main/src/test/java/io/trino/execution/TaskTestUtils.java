@@ -17,30 +17,27 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.configuration.secrets.SecretsResolver;
-import io.airlift.json.ObjectMapperProvider;
 import io.opentelemetry.api.trace.Span;
 import io.trino.client.NodeVersion;
+import io.trino.connector.CatalogHandle;
 import io.trino.connector.CatalogServiceProvider;
 import io.trino.cost.StatsAndCosts;
-import io.trino.event.SplitMonitor;
-import io.trino.eventlistener.EventListenerConfig;
-import io.trino.eventlistener.EventListenerManager;
+import io.trino.exchange.ExchangeManagerConfig;
 import io.trino.exchange.ExchangeManagerRegistry;
 import io.trino.execution.BaseTestSqlTaskManager.MockDirectExchangeClientSupplier;
 import io.trino.execution.buffer.OutputBuffers;
 import io.trino.metadata.Split;
 import io.trino.operator.FlatHashStrategyCompiler;
+import io.trino.operator.NullSafeHashCompiler;
 import io.trino.operator.PagesIndex;
 import io.trino.operator.index.IndexJoinLookupStats;
 import io.trino.operator.index.IndexManager;
 import io.trino.server.protocol.spooling.QueryDataEncoders;
 import io.trino.server.protocol.spooling.SpoolingEnabledConfig;
-import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spiller.GenericSpillerFactory;
 import io.trino.split.PageSinkManager;
 import io.trino.split.PageSourceManager;
-import io.trino.sql.gen.CursorProcessorCompiler;
 import io.trino.sql.gen.ExpressionCompiler;
 import io.trino.sql.gen.JoinCompiler;
 import io.trino.sql.gen.JoinFilterFunctionCompiler;
@@ -104,7 +101,7 @@ public final class TaskTestUtils
                     Optional.empty()),
             ImmutableSet.of(SYMBOL),
             SOURCE_DISTRIBUTION,
-            Optional.empty(),
+            OptionalInt.empty(),
             ImmutableList.of(TABLE_SCAN_NODE_ID),
             new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), ImmutableList.of(SYMBOL))
                     .withBucketToPartition(Optional.of(new int[1])),
@@ -132,7 +129,7 @@ public final class TaskTestUtils
                     ImmutableMap.of(DYNAMIC_FILTER_SOURCE_ID, SYMBOL)),
             ImmutableSet.of(SYMBOL),
             SOURCE_DISTRIBUTION,
-            Optional.empty(),
+            OptionalInt.empty(),
             ImmutableList.of(TABLE_SCAN_NODE_ID),
             new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), ImmutableList.of(SYMBOL))
                     .withBucketToPartition(Optional.of(new int[1])),
@@ -147,11 +144,11 @@ public final class TaskTestUtils
         PageSourceManager pageSourceManager = new PageSourceManager(CatalogServiceProvider.singleton(CATALOG_HANDLE, new TestingPageSourceProvider()));
 
         BlockTypeOperators blockTypeOperators = new BlockTypeOperators(PLANNER_CONTEXT.getTypeOperators());
+        NullSafeHashCompiler hashCompiler = new NullSafeHashCompiler(PLANNER_CONTEXT.getTypeOperators());
         PartitionFunctionProvider partitionFunctionProvider = new PartitionFunctionProvider(
-                PLANNER_CONTEXT.getTypeOperators(),
+                hashCompiler,
                 CatalogServiceProvider.fail());
 
-        CursorProcessorCompiler cursorProcessorCompiler = new CursorProcessorCompiler(PLANNER_CONTEXT.getFunctionManager());
         PageFunctionCompiler pageFunctionCompiler = new PageFunctionCompiler(PLANNER_CONTEXT.getFunctionManager(), 0);
         ColumnarFilterCompiler columnarFilterCompiler = new ColumnarFilterCompiler(PLANNER_CONTEXT.getFunctionManager(), 0);
         return new LocalExecutionPlanner(
@@ -162,17 +159,17 @@ public final class TaskTestUtils
                 partitionFunctionProvider,
                 new PageSinkManager(CatalogServiceProvider.fail()),
                 new MockDirectExchangeClientSupplier(),
-                new ExpressionCompiler(cursorProcessorCompiler, pageFunctionCompiler, columnarFilterCompiler),
+                new ExpressionCompiler(pageFunctionCompiler, columnarFilterCompiler),
                 pageFunctionCompiler,
                 new JoinFilterFunctionCompiler(PLANNER_CONTEXT.getFunctionManager()),
                 new IndexJoinLookupStats(),
                 new TaskManagerConfig(),
-                new GenericSpillerFactory((types, spillContext, memoryContext) -> {
+                new GenericSpillerFactory((types, spillContext, memoryContext, parallelSpill) -> {
                     throw new UnsupportedOperationException();
                 }),
                 new QueryDataEncoders(new SpoolingEnabledConfig(), Set.of()),
                 Optional.empty(),
-                (types, spillContext, memoryContext) -> {
+                (types, spillContext, memoryContext, parallelSpill) -> {
                     throw new UnsupportedOperationException();
                 },
                 (types, partitionFunction, spillContext, memoryContext) -> {
@@ -180,13 +177,14 @@ public final class TaskTestUtils
                 },
                 new PagesIndex.TestingFactory(false),
                 new JoinCompiler(PLANNER_CONTEXT.getTypeOperators()),
-                new FlatHashStrategyCompiler(PLANNER_CONTEXT.getTypeOperators()),
+                new FlatHashStrategyCompiler(PLANNER_CONTEXT.getTypeOperators(), hashCompiler),
                 new OrderingCompiler(PLANNER_CONTEXT.getTypeOperators()),
                 new DynamicFilterConfig(),
                 blockTypeOperators,
                 PLANNER_CONTEXT.getTypeOperators(),
+                hashCompiler,
                 new TableExecuteContextManager(),
-                new ExchangeManagerRegistry(noop(), noopTracer(), new SecretsResolver(ImmutableMap.of())),
+                new ExchangeManagerRegistry(noop(), noopTracer(), new SecretsResolver(ImmutableMap.of()), new ExchangeManagerConfig()),
                 new NodeVersion("test"),
                 new CompilerConfig());
     }
@@ -194,12 +192,5 @@ public final class TaskTestUtils
     public static TaskInfo updateTask(SqlTask sqlTask, List<SplitAssignment> splitAssignments, OutputBuffers outputBuffers)
     {
         return sqlTask.updateTask(TEST_SESSION, Span.getInvalid(), Optional.of(PLAN_FRAGMENT), splitAssignments, outputBuffers, ImmutableMap.of(), false);
-    }
-
-    public static SplitMonitor createTestSplitMonitor()
-    {
-        return new SplitMonitor(
-                new EventListenerManager(new EventListenerConfig(), new SecretsResolver(ImmutableMap.of()), noop(), noopTracer(), new NodeVersion("test")),
-                new ObjectMapperProvider().get());
     }
 }

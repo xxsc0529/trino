@@ -57,6 +57,7 @@ import io.trino.sql.tree.CreateBranch;
 import io.trino.sql.tree.CreateCatalog;
 import io.trino.sql.tree.CreateFunction;
 import io.trino.sql.tree.CreateMaterializedView;
+import io.trino.sql.tree.CreateMaterializedView.WhenStaleBehavior;
 import io.trino.sql.tree.CreateRole;
 import io.trino.sql.tree.CreateSchema;
 import io.trino.sql.tree.CreateTable;
@@ -86,6 +87,7 @@ import io.trino.sql.tree.DoubleLiteral;
 import io.trino.sql.tree.DropBranch;
 import io.trino.sql.tree.DropCatalog;
 import io.trino.sql.tree.DropColumn;
+import io.trino.sql.tree.DropDefaultValue;
 import io.trino.sql.tree.DropFunction;
 import io.trino.sql.tree.DropMaterializedView;
 import io.trino.sql.tree.DropNotNullConstraint;
@@ -223,6 +225,7 @@ import io.trino.sql.tree.QueryPeriod;
 import io.trino.sql.tree.QuerySpecification;
 import io.trino.sql.tree.RangeQuantifier;
 import io.trino.sql.tree.RefreshMaterializedView;
+import io.trino.sql.tree.RefreshView;
 import io.trino.sql.tree.Relation;
 import io.trino.sql.tree.RenameColumn;
 import io.trino.sql.tree.RenameMaterializedView;
@@ -250,6 +253,7 @@ import io.trino.sql.tree.SelectItem;
 import io.trino.sql.tree.SessionProperty;
 import io.trino.sql.tree.SetAuthorizationStatement;
 import io.trino.sql.tree.SetColumnType;
+import io.trino.sql.tree.SetDefaultValue;
 import io.trino.sql.tree.SetPath;
 import io.trino.sql.tree.SetProperties;
 import io.trino.sql.tree.SetRole;
@@ -314,6 +318,7 @@ import io.trino.sql.tree.WithQuery;
 import io.trino.sql.tree.ZeroOrMoreQuantifier;
 import io.trino.sql.tree.ZeroOrOneQuantifier;
 import org.antlr.v4.runtime.ParserRuleContext;
+import org.antlr.v4.runtime.RuleContext;
 import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.antlr.v4.runtime.tree.TerminalNode;
@@ -609,6 +614,14 @@ class AstBuilder
             gracePeriod = Optional.of((IntervalLiteral) visit(context.interval()));
         }
 
+        Optional<WhenStaleBehavior> whenStale = Optional.empty();
+        if (context.INLINE() != null) {
+            whenStale = Optional.of(WhenStaleBehavior.INLINE);
+        }
+        else if (context.FAIL() != null) {
+            whenStale = Optional.of(WhenStaleBehavior.FAIL);
+        }
+
         Optional<String> comment = Optional.empty();
         if (context.COMMENT() != null) {
             comment = Optional.of(visitString(context.string()).getValue());
@@ -626,6 +639,7 @@ class AstBuilder
                 context.REPLACE() != null,
                 context.EXISTS() != null,
                 gracePeriod,
+                whenStale,
                 properties,
                 comment);
     }
@@ -636,6 +650,14 @@ class AstBuilder
         return new RefreshMaterializedView(
                 getLocation(context),
                 new Table(getQualifiedName(context.qualifiedName())));
+    }
+
+    @Override
+    public Node visitRefreshView(SqlBaseParser.RefreshViewContext context)
+    {
+        return new RefreshView(
+                getLocation(context),
+                getQualifiedName(context.qualifiedName()));
     }
 
     @Override
@@ -673,7 +695,7 @@ class AstBuilder
 
         return new Insert(
                 getLocation(context),
-                new Table(getQualifiedName(context.qualifiedName())),
+                new Table(getLocation(context), getQualifiedName(context.qualifiedName()), visitIfPresent(context.branch, Identifier.class)),
                 columnAliases,
                 (Query) visit(context.rootQuery()));
     }
@@ -683,7 +705,7 @@ class AstBuilder
     {
         return new Delete(
                 getLocation(context),
-                new Table(getLocation(context), getQualifiedName(context.qualifiedName())),
+                new Table(getLocation(context), getQualifiedName(context.qualifiedName()), visitIfPresent(context.branch, Identifier.class)),
                 visitIfPresent(context.booleanExpression(), Expression.class));
     }
 
@@ -692,7 +714,7 @@ class AstBuilder
     {
         return new Update(
                 getLocation(context),
-                new Table(getLocation(context), getQualifiedName(context.qualifiedName())),
+                new Table(getLocation(context), getQualifiedName(context.qualifiedName()), visitIfPresent(context.branch, Identifier.class)),
                 visit(context.updateAssignment(), UpdateAssignment.class),
                 visitIfPresent(context.booleanExpression(), Expression.class));
     }
@@ -712,10 +734,10 @@ class AstBuilder
     @Override
     public Node visitMerge(SqlBaseParser.MergeContext context)
     {
-        Table table = new Table(getLocation(context), getQualifiedName(context.qualifiedName()));
+        Table table = new Table(getLocation(context), getQualifiedName(context.qualifiedName()), visitIfPresent(context.branch, Identifier.class));
         Relation targetRelation = table;
-        if (context.identifier() != null) {
-            targetRelation = new AliasedRelation(table, (Identifier) visit(context.identifier()), null);
+        if (context.alias != null) {
+            targetRelation = new AliasedRelation(table, (Identifier) visit(context.alias), null);
         }
         return new Merge(
                 getLocation(context),
@@ -861,6 +883,27 @@ class AstBuilder
     }
 
     @Override
+    public Node visitSetDefaultValue(SqlBaseParser.SetDefaultValueContext context)
+    {
+        return new SetDefaultValue(
+                getLocation(context),
+                getQualifiedName(context.tableName),
+                getQualifiedName(context.columnName),
+                (Expression) visit(context.literal()),
+                context.EXISTS() != null);
+    }
+
+    @Override
+    public Node visitDropDefaultValue(SqlBaseParser.DropDefaultValueContext context)
+    {
+        return new DropDefaultValue(
+                getLocation(context),
+                getQualifiedName(context.tableName),
+                getQualifiedName(context.columnName),
+                context.EXISTS() != null);
+    }
+
+    @Override
     public Node visitSetColumnType(SqlBaseParser.SetColumnTypeContext context)
     {
         return new SetColumnType(
@@ -992,7 +1035,8 @@ class AstBuilder
         return new CreateBranch(
                 getLocation(context),
                 getQualifiedName(context.qualifiedName()),
-                (Identifier) visit(context.identifier()),
+                (Identifier) visit(context.branch),
+                visitIfPresent(context.from, Identifier.class),
                 toSaveMode(context.REPLACE(), context.EXISTS()),
                 properties);
     }
@@ -1713,7 +1757,7 @@ class AstBuilder
 
     private static List<String> extractPrivileges(List<SqlBaseParser.PrivilegeOrRoleContext> privilegesOrRoles)
     {
-        return privilegesOrRoles.stream().map(SqlBaseParser.PrivilegeOrRoleContext::getText).collect(toImmutableList());
+        return privilegesOrRoles.stream().map(AstBuilder::privilegeToString).collect(toImmutableList());
     }
 
     private Set<Identifier> extractRoles(List<SqlBaseParser.PrivilegeOrRoleContext> privilegesOrRoles)
@@ -1736,7 +1780,8 @@ class AstBuilder
         return new GrantObject(
                 location,
                 context.entityKind() == null ? Optional.empty() : Optional.of(context.entityKind().getText()),
-                getQualifiedName(context.qualifiedName()));
+                getQualifiedName(context.qualifiedName()),
+                getIdentifierIfPresent(context.branch));
     }
 
     @Override
@@ -1765,7 +1810,7 @@ class AstBuilder
         }
         else {
             privileges = Optional.of(context.privilege().stream()
-                    .map(SqlBaseParser.PrivilegeContext::getText)
+                    .map(AstBuilder::privilegeToString)
                     .collect(toList()));
         }
         return new Deny(
@@ -1773,6 +1818,16 @@ class AstBuilder
                 privileges,
                 createGrantObject(getLocation(context), context.grantObject()),
                 getPrincipalSpecification(context.grantee));
+    }
+
+    private static String privilegeToString(RuleContext context)
+    {
+        checkArgument(context.getChildCount() >= 1, "Privilege context must have at least one child");
+        List<String> children = new ArrayList<>();
+        for (int i = 0; i < context.getChildCount(); i++) {
+            children.add(context.getChild(i).getText());
+        }
+        return String.join(" ", children);
     }
 
     @Override
@@ -2066,7 +2121,7 @@ class AstBuilder
     public Node visitTableName(SqlBaseParser.TableNameContext context)
     {
         if (context.queryPeriod() != null) {
-            return new Table(getLocation(context), getQualifiedName(context.qualifiedName()), (QueryPeriod) visit(context.queryPeriod()));
+            return new Table(getLocation(context), getQualifiedName(context.qualifiedName()), (QueryPeriod) visit(context.queryPeriod()), Optional.empty());
         }
         return new Table(getLocation(context), getQualifiedName(context.qualifiedName()));
     }
@@ -2413,7 +2468,20 @@ class AstBuilder
     @Override
     public Node visitRowConstructor(SqlBaseParser.RowConstructorContext context)
     {
-        return new Row(getLocation(context), visit(context.expression(), Expression.class));
+        if (context.fieldConstructor().isEmpty()) {
+            return new Row(getLocation(context), visit(context.expression(), Expression.class).stream()
+                    .map(expression -> new Row.Field(expression.getLocation().orElseThrow(), Optional.empty(), expression))
+                    .toList());
+        }
+        return new Row(getLocation(context), visit(context.fieldConstructor(), Row.Field.class));
+    }
+
+    @Override
+    public Node visitFieldConstructor(SqlBaseParser.FieldConstructorContext context)
+    {
+        return new Row.Field(getLocation(context),
+                visitIfPresent(context.identifier(), Identifier.class),
+                (Expression) visit(context.expression()));
     }
 
     @Override

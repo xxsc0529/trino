@@ -39,8 +39,8 @@ import io.trino.spi.ErrorCode;
 import io.trino.spi.TrinoWarning;
 import io.trino.spi.WarningCode;
 import io.trino.spi.type.Type;
+import io.trino.spi.type.TypeParameter;
 import io.trino.spi.type.TypeSignature;
-import io.trino.spi.type.TypeSignatureParameter;
 import io.trino.sql.ExpressionFormatter;
 import io.trino.sql.analyzer.TypeSignatureTranslator;
 import io.trino.sql.tree.DataType;
@@ -49,10 +49,10 @@ import io.trino.sql.tree.GenericDataType;
 import io.trino.sql.tree.IntervalDayTimeDataType;
 import io.trino.sql.tree.NumericParameter;
 import io.trino.sql.tree.RowDataType;
-import io.trino.sql.tree.TypeParameter;
 
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -115,7 +115,7 @@ public final class ProtocolUtil
                             if (parameter instanceof NumericParameter numericParameter) {
                                 return numericParameter.getValue();
                             }
-                            if (parameter instanceof TypeParameter typeParameter) {
+                            if (parameter instanceof io.trino.sql.tree.TypeParameter typeParameter) {
                                 return formatType(typeParameter.getValue(), supportsParametricDateTime);
                             }
                             throw new IllegalArgumentException("Unsupported parameter type: " + parameter.getClass().getName());
@@ -144,26 +144,24 @@ public final class ProtocolUtil
         }
 
         return new ClientTypeSignature(signature.getBase(), signature.getParameters().stream()
-                .map(parameter -> toClientTypeSignatureParameter(parameter, supportsParametricDateTime))
+                .map(parameter -> toClientTypeSignatureParameter(signature.getBase(), parameter, supportsParametricDateTime))
                 .collect(toImmutableList()));
     }
 
-    private static ClientTypeSignatureParameter toClientTypeSignatureParameter(TypeSignatureParameter parameter, boolean supportsParametricDateTime)
+    private static ClientTypeSignatureParameter toClientTypeSignatureParameter(String base, TypeParameter parameter, boolean supportsParametricDateTime)
     {
-        switch (parameter.getKind()) {
-            case TYPE:
-                return ClientTypeSignatureParameter.ofType(toClientTypeSignature(parameter.getTypeSignature(), supportsParametricDateTime));
-            case NAMED_TYPE:
-                return ClientTypeSignatureParameter.ofNamedType(new NamedClientTypeSignature(
-                        parameter.getNamedTypeSignature().getFieldName().map(value ->
-                                new RowFieldName(value.getName())),
-                        toClientTypeSignature(parameter.getNamedTypeSignature().getTypeSignature(), supportsParametricDateTime)));
-            case LONG:
-                return ClientTypeSignatureParameter.ofLong(parameter.getLongLiteral());
-            case VARIABLE:
-                // not expected here
-        }
-        throw new IllegalArgumentException("Unsupported kind: " + parameter.getKind());
+        return switch (parameter) {
+            case TypeParameter.Type(Optional<String> name, TypeSignature type) -> {
+                if (base.equalsIgnoreCase(ROW)) { // for backward compatibility with old clients, which expect NAMED_TYPE for row fields
+                    yield ClientTypeSignatureParameter.ofNamedType(new NamedClientTypeSignature(
+                            name.map(RowFieldName::new),
+                            toClientTypeSignature(type, supportsParametricDateTime)));
+                }
+                yield ClientTypeSignatureParameter.ofType(toClientTypeSignature(type, supportsParametricDateTime));
+            }
+            case TypeParameter.Numeric number -> ClientTypeSignatureParameter.ofLong(number.value());
+            case TypeParameter.Variable _ -> throw new IllegalArgumentException("Unsupported parameter kind: " + parameter);
+        };
     }
 
     public static StatementStats toStatementStats(ResultQueryInfo queryInfo)
@@ -192,8 +190,8 @@ public final class ProtocolUtil
                 .setElapsedTimeMillis(queryStats.getElapsedTime().toMillis())
                 .setFinishingTimeMillis(queryStats.getFinishingTime().toMillis())
                 .setPhysicalInputTimeMillis(queryStats.getPhysicalInputReadTime().toMillis())
-                .setProcessedRows(queryStats.getRawInputPositions())
-                .setProcessedBytes(queryStats.getRawInputDataSize().toBytes())
+                .setProcessedRows(queryStats.getProcessedInputPositions())
+                .setProcessedBytes(queryStats.getPhysicalInputDataSize().toBytes() + queryStats.getInternalNetworkInputDataSize().toBytes())
                 .setPhysicalInputBytes(queryStats.getPhysicalInputDataSize().toBytes())
                 .setPhysicalWrittenBytes(queryStats.getPhysicalWrittenDataSize().toBytes())
                 .setInternalNetworkInputBytes(queryStats.getInternalNetworkInputDataSize().toBytes())
@@ -219,7 +217,7 @@ public final class ProtocolUtil
 
         // Store current stage details into a builder
         StageStats.Builder builder = StageStats.builder()
-                .setStageId(String.valueOf(stageInfo.getStageId().getId()))
+                .setStageId(String.valueOf(stageInfo.getStageId().id()))
                 .setState(stageInfo.getState().toString())
                 .setDone(stageInfo.getState().isDone())
                 .setTotalSplits(stageStats.getTotalDrivers())
@@ -228,8 +226,8 @@ public final class ProtocolUtil
                 .setCompletedSplits(stageStats.getCompletedDrivers())
                 .setCpuTimeMillis(stageStats.getTotalCpuTime().toMillis())
                 .setWallTimeMillis(stageStats.getTotalScheduledTime().toMillis())
-                .setProcessedRows(stageStats.getRawInputPositions())
-                .setProcessedBytes(stageStats.getRawInputDataSize().toBytes())
+                .setProcessedRows(stageStats.getProcessedInputPositions())
+                .setProcessedBytes(stageStats.getPhysicalInputDataSize().toBytes() + stageStats.getInternalNetworkInputDataSize().toBytes())
                 .setPhysicalInputBytes(stageStats.getPhysicalInputDataSize().toBytes())
                 .setFailedTasks(stageStats.getFailedTasks())
                 .setCoordinatorOnly(stageInfo.isCoordinatorOnly())

@@ -113,7 +113,8 @@ public class TestHashAggregationOperator
 
     private final ExecutorService executor = newCachedThreadPool(daemonThreadsNamed(getClass().getSimpleName() + "-%s"));
     private final ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed(getClass().getSimpleName() + "-scheduledExecutor-%s"));
-    private final FlatHashStrategyCompiler hashStrategyCompiler = new FlatHashStrategyCompiler(new TypeOperators());
+    private final NullSafeHashCompiler hashCompiler = new NullSafeHashCompiler(new TypeOperators());
+    private final FlatHashStrategyCompiler hashStrategyCompiler = new FlatHashStrategyCompiler(new TypeOperators(), hashCompiler);
 
     @AfterAll
     public void tearDown()
@@ -165,7 +166,7 @@ public class TestHashAggregationOperator
                         maxVarcharColumn.createAggregatorFactory(SINGLE, ImmutableList.of(2), OptionalInt.empty()),
                         countVarcharColumn.createAggregatorFactory(SINGLE, ImmutableList.of(0), OptionalInt.empty()),
                         countBooleanColumn.createAggregatorFactory(SINGLE, ImmutableList.of(4), OptionalInt.empty())),
-                Optional.empty(),
+                OptionalInt.empty(),
                 100_000,
                 Optional.of(DataSize.of(16, MEGABYTE)),
                 spillEnabled,
@@ -212,7 +213,7 @@ public class TestHashAggregationOperator
         TestingAggregationFunction countBooleanColumn = FUNCTION_RESOLUTION.getAggregateFunction("count", fromTypes(BOOLEAN));
         TestingAggregationFunction maxVarcharColumn = FUNCTION_RESOLUTION.getAggregateFunction("max", fromTypes(VARCHAR));
 
-        Optional<Integer> groupIdChannel = Optional.of(1);
+        OptionalInt groupIdChannel = OptionalInt.of(1);
         List<Integer> groupByChannels = Ints.asList(1, 2);
         List<Integer> globalAggregationGroupIds = Ints.asList(42, 49);
         RowPagesBuilder rowPagesBuilder = rowPagesBuilder(groupByChannels, VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BOOLEAN);
@@ -290,7 +291,7 @@ public class TestHashAggregationOperator
                 SINGLE,
                 true,
                 ImmutableList.of(arrayAggColumn.createAggregatorFactory(SINGLE, ImmutableList.of(0), OptionalInt.empty())),
-                Optional.empty(),
+                OptionalInt.empty(),
                 100_000,
                 Optional.of(DataSize.of(16, MEGABYTE)),
                 spillEnabled,
@@ -336,7 +337,7 @@ public class TestHashAggregationOperator
                             LONG_MIN.createAggregatorFactory(SINGLE, ImmutableList.of(3), OptionalInt.empty()),
                             LONG_AVERAGE.createAggregatorFactory(SINGLE, ImmutableList.of(3), OptionalInt.empty()),
                             maxVarcharColumn.createAggregatorFactory(SINGLE, ImmutableList.of(2), OptionalInt.empty())),
-                    Optional.empty(),
+                    OptionalInt.empty(),
                     100_000,
                     Optional.of(DataSize.of(16, MEGABYTE)),
                     hashStrategyCompiler,
@@ -387,7 +388,7 @@ public class TestHashAggregationOperator
                 SINGLE,
                 false,
                 ImmutableList.of(COUNT.createAggregatorFactory(SINGLE, ImmutableList.of(0), OptionalInt.empty())),
-                Optional.empty(),
+                OptionalInt.empty(),
                 100_000,
                 Optional.of(DataSize.of(16, MEGABYTE)),
                 spillEnabled,
@@ -418,7 +419,7 @@ public class TestHashAggregationOperator
                 ImmutableList.of(),
                 SINGLE,
                 ImmutableList.of(COUNT.createAggregatorFactory(SINGLE, ImmutableList.of(0), OptionalInt.empty())),
-                Optional.of(1),
+                OptionalInt.of(1),
                 1,
                 Optional.of(DataSize.of(16, MEGABYTE)),
                 hashStrategyCompiler,
@@ -427,11 +428,11 @@ public class TestHashAggregationOperator
         // get result with yield; pick a relatively small buffer for aggregator's memory usage
         GroupByHashYieldResult result;
         result = finishOperatorWithYieldingGroupByHash(input, type, operatorFactory, this::getHashCapacity, 450_000);
-        assertThat(result.getYieldCount()).isGreaterThanOrEqualTo(5);
-        assertThat(result.getMaxReservedBytes()).isGreaterThanOrEqualTo(20L << 20);
+        assertThat(result.yieldCount()).isGreaterThanOrEqualTo(5);
+        assertThat(result.maxReservedBytes()).isGreaterThanOrEqualTo(20L << 20);
 
         int count = 0;
-        for (Page page : result.getOutput()) {
+        for (Page page : result.output()) {
             // value + aggregation result
             assertThat(page.getChannelCount()).isEqualTo(2);
             for (int i = 0; i < page.getPositionCount(); i++) {
@@ -470,7 +471,7 @@ public class TestHashAggregationOperator
                     ImmutableList.of(),
                     SINGLE,
                     ImmutableList.of(COUNT.createAggregatorFactory(SINGLE, ImmutableList.of(0), OptionalInt.empty())),
-                    Optional.empty(),
+                    OptionalInt.empty(),
                     100_000,
                     Optional.of(DataSize.of(16, MEGABYTE)),
                     hashStrategyCompiler,
@@ -506,7 +507,7 @@ public class TestHashAggregationOperator
                 SINGLE,
                 ImmutableList.of(COUNT.createAggregatorFactory(SINGLE, ImmutableList.of(0), OptionalInt.empty()),
                         LONG_AVERAGE.createAggregatorFactory(SINGLE, ImmutableList.of(1), OptionalInt.empty())),
-                Optional.empty(),
+                OptionalInt.empty(),
                 100_000,
                 Optional.of(DataSize.of(16, MEGABYTE)),
                 hashStrategyCompiler,
@@ -536,7 +537,7 @@ public class TestHashAggregationOperator
                 ImmutableList.of(),
                 PARTIAL,
                 ImmutableList.of(LONG_MIN.createAggregatorFactory(PARTIAL, ImmutableList.of(0), OptionalInt.empty())),
-                Optional.empty(),
+                OptionalInt.empty(),
                 100_000,
                 Optional.of(DataSize.of(1, KILOBYTE)),
                 hashStrategyCompiler,
@@ -613,7 +614,7 @@ public class TestHashAggregationOperator
                 SINGLE,
                 false,
                 ImmutableList.of(LONG_MIN.createAggregatorFactory(SINGLE, ImmutableList.of(0), OptionalInt.empty())),
-                Optional.empty(),
+                OptionalInt.empty(),
                 1,
                 Optional.of(DataSize.of(16, MEGABYTE)),
                 true,
@@ -659,7 +660,7 @@ public class TestHashAggregationOperator
                 SINGLE,
                 false,
                 ImmutableList.of(LONG_MIN.createAggregatorFactory(SINGLE, ImmutableList.of(0), OptionalInt.empty())),
-                Optional.empty(),
+                OptionalInt.empty(),
                 10,
                 Optional.of(DataSize.of(16, MEGABYTE)),
                 /* spill enabled */ true,
@@ -727,7 +728,7 @@ public class TestHashAggregationOperator
                         LONG_MIN.createAggregatorFactory(SINGLE, ImmutableList.of(3), OptionalInt.empty()),
                         LONG_AVERAGE.createAggregatorFactory(SINGLE, ImmutableList.of(3), OptionalInt.empty()),
                         maxVarcharColumn.createAggregatorFactory(SINGLE, ImmutableList.of(2), OptionalInt.empty())),
-                Optional.empty(),
+                OptionalInt.empty(),
                 100_000,
                 Optional.of(DataSize.of(16, MEGABYTE)),
                 true,
@@ -759,7 +760,7 @@ public class TestHashAggregationOperator
                 ImmutableList.of(),
                 SINGLE,
                 ImmutableList.of(LONG_MIN.createAggregatorFactory(SINGLE, ImmutableList.of(0), OptionalInt.empty())),
-                Optional.empty(),
+                OptionalInt.empty(),
                 100_000,
                 Optional.of(DataSize.of(16, MEGABYTE)),
                 hashStrategyCompiler,
@@ -795,7 +796,7 @@ public class TestHashAggregationOperator
                 ImmutableList.of(),
                 PARTIAL,
                 ImmutableList.of(LONG_MIN.createAggregatorFactory(PARTIAL, ImmutableList.of(0), OptionalInt.empty())),
-                Optional.empty(),
+                OptionalInt.empty(),
                 100,
                 Optional.of(maxPartialMemory), // this setting makes operator to flush after each page
                 hashStrategyCompiler,
@@ -875,7 +876,7 @@ public class TestHashAggregationOperator
                 ImmutableList.of(),
                 PARTIAL,
                 ImmutableList.of(LONG_MIN.createAggregatorFactory(PARTIAL, ImmutableList.of(0), OptionalInt.empty())),
-                Optional.empty(),
+                OptionalInt.empty(),
                 10,
                 Optional.of(DataSize.of(16, MEGABYTE)), // this setting makes operator to flush only after all pages
                 hashStrategyCompiler,
@@ -944,7 +945,7 @@ public class TestHashAggregationOperator
                         SINGLE,
                         false,
                         ImmutableList.of(COUNT.createAggregatorFactory(SINGLE, ImmutableList.of(0), OptionalInt.empty())),
-                        Optional.empty(),
+                        OptionalInt.empty(),
                         /* expectedGroups */ 1,
                         Optional.of(DataSize.of(16, MEGABYTE)),
                         /* spill enabled */  true,
@@ -1008,7 +1009,7 @@ public class TestHashAggregationOperator
                         COUNT.createAggregatorFactory(SINGLE,
                                 ImmutableList.of(0),
                                 OptionalInt.empty())),
-                Optional.empty(),
+                OptionalInt.empty(),
                 10,
                 Optional.of(DataSize.of(16, MEGABYTE)),
                 /* spill enabled */ true,

@@ -97,8 +97,7 @@ public class TestIcebergGlueCatalogConnectorSmokeTest
                                 "iceberg.catalog.type", "glue",
                                 "hive.metastore.glue.default-warehouse-dir", schemaPath(),
                                 "iceberg.register-table-procedure.enabled", "true",
-                                "iceberg.writer-sort-buffer-size", "1MB",
-                                "iceberg.allowed-extra-properties", "write.metadata.delete-after-commit.enabled,write.metadata.previous-versions-max"))
+                                "iceberg.writer-sort-buffer-size", "1MB"))
                 .setSchemaInitializer(
                         SchemaInitializer.builder()
                                 .withClonedTpchTables(REQUIRED_TPCH_TABLES)
@@ -132,8 +131,7 @@ public class TestIcebergGlueCatalogConnectorSmokeTest
                                 "WITH (\n" +
                                 "   format = 'PARQUET',\n" +
                                 "   format_version = 2,\n" +
-                                "   location = '%2$s/%1$s.db/region-\\E.*\\Q',\n" +
-                                "   max_commit_retry = 4\n" +
+                                "   location = '%2$s/%1$s.db/region-\\E.*\\Q'\n" +
                                 ")\\E",
                         schemaName,
                         schemaPath()));
@@ -191,7 +189,7 @@ public class TestIcebergGlueCatalogConnectorSmokeTest
     }
 
     @Override
-    protected void dropTableFromMetastore(String tableName)
+    protected void dropTableFromCatalog(String tableName)
     {
         glueClient.deleteTable(x -> x.databaseName(schemaName).name(tableName));
         assertThatThrownBy(() -> getGlueTable(tableName))

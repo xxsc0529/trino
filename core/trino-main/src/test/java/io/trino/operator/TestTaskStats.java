@@ -21,7 +21,7 @@ import io.airlift.units.Duration;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
-import java.util.Optional;
+import java.util.OptionalInt;
 
 import static io.trino.operator.TestPipelineStats.assertExpectedPipelineStats;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
@@ -67,9 +67,6 @@ public class TestTaskStats
             DataSize.ofBytes(192),
             202,
 
-            DataSize.ofBytes(19),
-            20,
-
             DataSize.ofBytes(21),
             22,
 
@@ -82,7 +79,7 @@ public class TestTaskStats
 
             DataSize.ofBytes(25),
             DataSize.ofBytes(25),
-            Optional.of(2),
+            OptionalInt.of(2),
 
             26,
             new Duration(27, NANOSECONDS),
@@ -137,9 +134,6 @@ public class TestTaskStats
         assertThat(actual.getPhysicalInputReadTime()).isEqualTo(new Duration(15, NANOSECONDS));
         assertThat(actual.getInternalNetworkInputDataSize()).isEqualTo(DataSize.ofBytes(192));
         assertThat(actual.getInternalNetworkInputPositions()).isEqualTo(202);
-
-        assertThat(actual.getRawInputDataSize()).isEqualTo(DataSize.ofBytes(19));
-        assertThat(actual.getRawInputPositions()).isEqualTo(20);
 
         assertThat(actual.getProcessedInputDataSize()).isEqualTo(DataSize.ofBytes(21));
         assertThat(actual.getProcessedInputPositions()).isEqualTo(22);

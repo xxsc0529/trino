@@ -31,7 +31,6 @@ import io.trino.cost.PlanCostEstimate;
 import io.trino.cost.PlanNodeStatsAndCostSummary;
 import io.trino.cost.PlanNodeStatsEstimate;
 import io.trino.cost.StatsAndCosts;
-import io.trino.execution.DistributionSnapshot;
 import io.trino.execution.QueryStats;
 import io.trino.execution.StageInfo;
 import io.trino.execution.StageStats;
@@ -42,6 +41,7 @@ import io.trino.metadata.FunctionManager;
 import io.trino.metadata.Metadata;
 import io.trino.metadata.ResolvedFunction;
 import io.trino.metadata.TableHandle;
+import io.trino.plugin.base.metrics.DistributionSnapshot;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.expression.FunctionName;
 import io.trino.spi.function.CatalogSchemaFunctionName;
@@ -428,7 +428,7 @@ public class PlanPrinter
             Anonymizer anonymizer,
             NodeVersion version)
     {
-        return textDistributedPlan(stages.getStages(), queryStats, valuePrinter, verbose, anonymizer, version);
+        return textDistributedPlan(stages.getSubStagesDeepTopological(stages.getOutputStageId(), true), queryStats, valuePrinter, verbose, anonymizer, version);
     }
 
     public static String textDistributedPlan(
@@ -465,11 +465,12 @@ public class PlanPrinter
                 .collect(toImmutableMap(DynamicFilterDomainStats::getDynamicFilterId, identity()));
 
         builder.append(format("Trino version: %s\n", version));
-        builder.append(format("Queued: %s, Analysis: %s, Planning: %s, Execution: %s\n",
+        builder.append(format("Queued: %s, Analysis: %s, Planning: %s, Execution: %s, Finishing: %s\n",
                 queryStats.getQueuedTime().convertToMostSuccinctTimeUnit(),
                 queryStats.getAnalysisTime().convertToMostSuccinctTimeUnit(),
                 queryStats.getPlanningTime().convertToMostSuccinctTimeUnit(),
-                queryStats.getExecutionTime().convertToMostSuccinctTimeUnit()));
+                queryStats.getExecutionTime().convertToMostSuccinctTimeUnit(),
+                queryStats.getFinishingTime().convertToMostSuccinctTimeUnit()));
 
         for (StageInfo stageInfo : stages) {
             if (stageInfo.getPlan() == null) {
@@ -596,7 +597,7 @@ public class PlanPrinter
                 .map(argument -> {
                     if (argument.isConstant()) {
                         NullableValue constant = argument.getConstant();
-                        String printableValue = valuePrinter.castToVarchar(constant.getType(), constant.getValue());
+                        String printableValue = valuePrinter.render(constant.getType(), constant.getValue());
                         return constant.getType().getDisplayName() + "(" + anonymizer.anonymize(constant.getType(), printableValue) + ")";
                     }
                     return anonymizer.anonymize(argument.getColumn());
@@ -618,7 +619,7 @@ public class PlanPrinter
 
         Map<PlanNodeId, Long> getSplitsTotalTimeNanos = stageInfo.map(info -> info.getStageStats().getGetSplitDistribution()
                         .entrySet().stream()
-                        .collect(toImmutableMap(Entry::getKey, entry -> (long) entry.getValue().getTotal())))
+                        .collect(toImmutableMap(Entry::getKey, entry -> (long) entry.getValue().total())))
                 .orElse(ImmutableMap.of());
         Map<PlanNodeId, Metrics> splitSourceMetrics = stageInfo.map(info -> info.getStageStats().getSplitSourceMetrics())
                 .orElse(ImmutableMap.of());
@@ -662,7 +663,7 @@ public class PlanPrinter
                 plan,
                 ImmutableSet.of(),
                 SINGLE_DISTRIBUTION,
-                Optional.empty(),
+                OptionalInt.empty(),
                 ImmutableList.of(plan.getId()),
                 new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), plan.getOutputSymbols()),
                 OptionalInt.empty(),
@@ -1700,7 +1701,7 @@ public class PlanPrinter
                 addNode(node,
                         format("%sExchange", UPPER_UNDERSCORE.to(CaseFormat.UPPER_CAMEL, node.getScope().toString())),
                         ImmutableMap.of(
-                                "partitionCount", node.getPartitioningScheme().getPartitionCount().map(String::valueOf).orElse(""),
+                                "partitionCount", node.getPartitioningScheme().getPartitionCount().isPresent() ? Integer.toString(node.getPartitioningScheme().getPartitionCount().orElseThrow()) : "",
                                 "scaleWriters", formatBoolean(node.getPartitioningScheme().getPartitioning().getHandle().isScaleWriters()),
                                 "type", node.getType().name(),
                                 "isReplicateNullsAndAny", formatBoolean(node.getPartitioningScheme().isReplicateNullsAndAny())),
@@ -1904,7 +1905,7 @@ public class PlanPrinter
                     argument.getType().getDisplayName(),
                     anonymizer.anonymize(
                             argument.getType(),
-                            valuePrinter.castToVarchar(argument.getType(), argument.getValue())));
+                            valuePrinter.render(argument.getType(), argument.getValue())));
         }
 
         private String formatDescriptorArgument(String argumentName, DescriptorArgument argument)
@@ -2007,7 +2008,7 @@ public class PlanPrinter
 
         private void printAssignments(NodeRepresentation nodeOutput, Assignments assignments)
         {
-            for (Entry<Symbol, Expression> entry : assignments.getMap().entrySet()) {
+            for (Entry<Symbol, Expression> entry : assignments.assignments().entrySet()) {
                 if (entry.getValue() instanceof Reference && ((Reference) entry.getValue()).name().equals(entry.getKey().name())) {
                     // skip identity assignments
                     continue;
@@ -2064,7 +2065,7 @@ public class PlanPrinter
                         for (Range range : ranges.getOrderedRanges()) {
                             StringBuilder builder = new StringBuilder();
                             if (range.isSingleValue()) {
-                                String value = anonymizer.anonymize(type, valuePrinter.castToVarchar(type, range.getSingleValue()));
+                                String value = anonymizer.anonymize(type, valuePrinter.render(type, range.getSingleValue()));
                                 builder.append('[').append(value).append(']');
                             }
                             else {
@@ -2074,7 +2075,7 @@ public class PlanPrinter
                                     builder.append("<min>");
                                 }
                                 else {
-                                    builder.append(anonymizer.anonymize(type, valuePrinter.castToVarchar(type, range.getLowBoundedValue())));
+                                    builder.append(anonymizer.anonymize(type, valuePrinter.render(type, range.getLowBoundedValue())));
                                 }
 
                                 builder.append(", ");
@@ -2083,7 +2084,7 @@ public class PlanPrinter
                                     builder.append("<max>");
                                 }
                                 else {
-                                    builder.append(anonymizer.anonymize(type, valuePrinter.castToVarchar(type, range.getHighBoundedValue())));
+                                    builder.append(anonymizer.anonymize(type, valuePrinter.render(type, range.getHighBoundedValue())));
                                 }
 
                                 builder.append(range.isHighInclusive() ? ']' : ')');
@@ -2092,7 +2093,7 @@ public class PlanPrinter
                         }
                     },
                     discreteValues -> discreteValues.getValues().stream()
-                            .map(value -> anonymizer.anonymize(type, valuePrinter.castToVarchar(type, value)))
+                            .map(value -> anonymizer.anonymize(type, valuePrinter.render(type, value)))
                             .sorted() // Sort so the values will be printed in predictable order
                             .forEach(parts::add),
                     allOrNone -> {

@@ -104,7 +104,6 @@ final class TestIcebergRestCatalogNestedNamespaceConnectorSmokeTest
                 .put("iceberg.rest-catalog.uri", testServer.getBaseUrl().toString())
                 .put("iceberg.register-table-procedure.enabled", "true")
                 .put("iceberg.writer-sort-buffer-size", "1MB")
-                .put("iceberg.allowed-extra-properties", "write.metadata.delete-after-commit.enabled,write.metadata.previous-versions-max")
                 .buildOrThrow();
 
         Map<String, String> nestedNamespaceEnabled = ImmutableMap.<String, String>builder()
@@ -178,8 +177,7 @@ final class TestIcebergRestCatalogNestedNamespaceConnectorSmokeTest
                         "WITH \\(\n" +
                         "   format = '" + format.name() + "',\n" +
                         "   format_version = 2,\n" +
-                        format("   location = '.*/" + schemaName + "/region.*',\n" +
-                        "   max_commit_retry = 4\n") +
+                        "   location = '.*/" + schemaName + "/region.*'\n" +
                         "\\)");
     }
 
@@ -237,8 +235,7 @@ final class TestIcebergRestCatalogNestedNamespaceConnectorSmokeTest
                 .isInstanceOf(QueryFailedException.class)
                 .cause()
                 .hasMessageContaining("Failed to drop table")
-                .cause()
-                .hasMessageMatching("Server error: NotFoundException: Failed to open input stream for file: (.*)");
+                .hasNoCause();
     }
 
     @Test
@@ -278,7 +275,7 @@ final class TestIcebergRestCatalogNestedNamespaceConnectorSmokeTest
     }
 
     @Override
-    protected void dropTableFromMetastore(String tableName)
+    protected void dropTableFromCatalog(String tableName)
     {
         backend.dropTable(toIdentifier(tableName), false);
     }

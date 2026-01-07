@@ -15,20 +15,21 @@ package io.trino.plugin.iceberg.catalog.rest;
 
 import com.google.common.collect.ImmutableMap;
 import io.trino.cache.EvictableCacheBuilder;
+import io.trino.filesystem.hdfs.HdfsFileSystemFactory;
 import io.trino.metastore.TableInfo;
-import io.trino.plugin.hive.NodeVersion;
 import io.trino.plugin.iceberg.CommitTaskData;
+import io.trino.plugin.iceberg.DefaultIcebergFileSystemFactory;
 import io.trino.plugin.iceberg.IcebergMetadata;
 import io.trino.plugin.iceberg.TableStatisticsWriter;
 import io.trino.plugin.iceberg.catalog.BaseTrinoCatalogTest;
 import io.trino.plugin.iceberg.catalog.TrinoCatalog;
+import io.trino.plugin.iceberg.catalog.rest.IcebergRestCatalogConfig.Security;
+import io.trino.spi.NodeVersion;
 import io.trino.spi.TrinoException;
 import io.trino.spi.catalog.CatalogName;
-import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.ConnectorMetadata;
 import io.trino.spi.security.PrincipalType;
 import io.trino.spi.security.TrinoPrincipal;
-import io.trino.spi.type.TestingTypeManager;
 import org.apache.iceberg.rest.DelegatingRestSessionCatalog;
 import org.apache.iceberg.rest.RESTSessionCatalog;
 import org.junit.jupiter.api.Test;
@@ -39,14 +40,19 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.Optional;
 
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static com.google.common.util.concurrent.MoreExecutors.newDirectExecutorService;
 import static io.airlift.json.JsonCodec.jsonCodec;
 import static io.trino.metastore.TableInfo.ExtendedRelationType.OTHER_VIEW;
+import static io.trino.plugin.hive.HiveTestUtils.HDFS_ENVIRONMENT;
+import static io.trino.plugin.hive.HiveTestUtils.HDFS_FILE_SYSTEM_STATS;
+import static io.trino.plugin.iceberg.IcebergTestUtils.TABLE_STATISTICS_READER;
 import static io.trino.plugin.iceberg.catalog.rest.IcebergRestCatalogConfig.SessionType.NONE;
 import static io.trino.plugin.iceberg.catalog.rest.RestCatalogTestUtils.backendCatalog;
 import static io.trino.sql.planner.TestingPlannerContext.PLANNER_CONTEXT;
 import static io.trino.testing.TestingNames.randomNameSuffix;
+import static io.trino.type.InternalTypeManager.TESTING_TYPE_MANAGER;
 import static java.util.Locale.ENGLISH;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -60,6 +66,17 @@ public class TestTrinoRestCatalog
             throws IOException
     {
         return createTrinoRestCatalog(useUniqueTableLocations, ImmutableMap.of());
+    }
+
+    @Override
+    protected void createNamespaceWithProperties(TrinoCatalog catalog, String namespace, Map<String, String> properties)
+    {
+        catalog.createNamespace(
+                SESSION,
+                namespace,
+                properties.entrySet().stream()
+                        .collect(toImmutableMap(Map.Entry::getKey, Map.Entry::getValue)),
+                new TrinoPrincipal(PrincipalType.USER, SESSION.getUser()));
     }
 
     private static TrinoRestCatalog createTrinoRestCatalog(boolean useUniqueTableLocations, Map<String, String> properties)
@@ -77,17 +94,20 @@ public class TestTrinoRestCatalog
         restSessionCatalog.initialize(catalogName, properties);
 
         return new TrinoRestCatalog(
+                new DefaultIcebergFileSystemFactory(new HdfsFileSystemFactory(HDFS_ENVIRONMENT, HDFS_FILE_SYSTEM_STATS)),
                 restSessionCatalog,
                 new CatalogName(catalogName),
+                Security.NONE,
                 NONE,
                 ImmutableMap.of(),
                 false,
                 "test",
-                new TestingTypeManager(),
+                TESTING_TYPE_MANAGER,
                 useUniqueTableLocations,
                 false,
                 EvictableCacheBuilder.newBuilder().expireAfterWrite(1000, MILLISECONDS).shareNothingWhenDisabled().build(),
-                EvictableCacheBuilder.newBuilder().expireAfterWrite(1000, MILLISECONDS).shareNothingWhenDisabled().build());
+                EvictableCacheBuilder.newBuilder().expireAfterWrite(1000, MILLISECONDS).shareNothingWhenDisabled().build(),
+                true);
     }
 
     @Test
@@ -114,18 +134,19 @@ public class TestTrinoRestCatalog
             // Test with IcebergMetadata, should the ConnectorMetadata implementation behavior depend on that class
             ConnectorMetadata icebergMetadata = new IcebergMetadata(
                     PLANNER_CONTEXT.getTypeManager(),
-                    CatalogHandle.fromId("iceberg:NORMAL:v12345"),
                     jsonCodec(CommitTaskData.class),
                     catalog,
                     (connectorIdentity, fileIoProperties) -> {
                         throw new UnsupportedOperationException();
                     },
+                    TABLE_STATISTICS_READER,
                     new TableStatisticsWriter(new NodeVersion("test-version")),
                     Optional.empty(),
                     false,
                     _ -> false,
                     newDirectExecutorService(),
                     directExecutor(),
+                    newDirectExecutorService(),
                     newDirectExecutorService());
             assertThat(icebergMetadata.schemaExists(SESSION, namespace)).as("icebergMetadata.schemaExists(namespace)")
                     .isTrue();

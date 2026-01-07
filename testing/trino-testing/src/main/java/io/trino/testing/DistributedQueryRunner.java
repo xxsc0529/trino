@@ -30,6 +30,7 @@ import io.trino.Session;
 import io.trino.Session.SessionBuilder;
 import io.trino.client.ClientSession;
 import io.trino.client.StatementClient;
+import io.trino.connector.ConnectorServicesProvider;
 import io.trino.connector.CoordinatorDynamicCatalogManager;
 import io.trino.cost.StatsCalculator;
 import io.trino.execution.FailureInjector.InjectedFailureType;
@@ -39,6 +40,7 @@ import io.trino.metadata.FunctionBundle;
 import io.trino.metadata.QualifiedObjectName;
 import io.trino.metadata.SessionPropertyManager;
 import io.trino.node.InternalNode;
+import io.trino.plugin.exchange.filesystem.FileSystemExchangePlugin;
 import io.trino.server.BasicQueryInfo;
 import io.trino.server.PluginManager;
 import io.trino.server.SessionPropertyDefaults;
@@ -261,7 +263,7 @@ public final class DistributedQueryRunner
             Optional<List<SystemAccessControl>> systemAccessControls,
             List<EventListener> eventListeners)
     {
-        if (this.coordinator != null) {
+        if (!extraProperties.containsKey("discovery.uri") && this.coordinator != null) {
             String discoveryUri = this.coordinator.getCurrentNode().getInternalUri() +
                     backupCoordinator.map(backup -> "," + backup.getCurrentNode().getInternalUri()).orElse("");
             extraProperties = ImmutableMap.<String, String>builder()
@@ -297,7 +299,7 @@ public final class DistributedQueryRunner
     private static void setupLogging()
     {
         Logging logging = Logging.initialize();
-        logging.setLevel("Bootstrap", WARN);
+        logging.setLevel("io.trino.bootstrap", WARN);
         logging.setLevel("org.glassfish", ERROR);
         logging.setLevel("org.eclipse.jetty.server", WARN);
         logging.setLevel("org.hibernate.validator.internal.util.Version", WARN);
@@ -729,6 +731,8 @@ public final class DistributedQueryRunner
     {
         private Session defaultSession;
         private boolean withTracing;
+        private Optional<String> exchangeType = Optional.empty();
+        private Optional<Map<String, String>> exchangeProperties = Optional.empty();
         private int workerCount = 2;
         private Map<String, String> extraProperties = ImmutableMap.of();
         private Map<String, String> coordinatorProperties = ImmutableMap.of();
@@ -917,6 +921,26 @@ public final class DistributedQueryRunner
             return self();
         }
 
+        public SELF withExchange(String exchangeType)
+        {
+            return withExchange(exchangeType, Optional.empty());
+        }
+
+        public SELF withExchange(String exchangeType, Map<String, String> properties)
+        {
+            return withExchange(exchangeType, Optional.of(ImmutableMap.copyOf(properties)));
+        }
+
+        private SELF withExchange(String exchangeType, Optional<Map<String, String>> properties)
+        {
+            if (!exchangeType.equals("filesystem")) {
+                throw new IllegalArgumentException("Unknow exchange type: " + exchangeType);
+            }
+            this.exchangeType = Optional.of(exchangeType);
+            this.exchangeProperties = properties;
+            return self();
+        }
+
         public SELF withProtocolSpooling(String encoding)
         {
             this.encoding = Optional.of(encoding);
@@ -938,13 +962,11 @@ public final class DistributedQueryRunner
                 // create smaller number of segments
                 addExtraProperty("protocol.spooling.initial-segment-size", "16MB");
                 addExtraProperty("protocol.spooling.max-segment-size", "32MB");
+                // Disable inlining to test spooling
+                addExtraProperty("protocol.spooling.inlining.enabled", "false");
                 addExtraProperty("protocol.spooling.shared-secret-key", randomAESKey());
                 // LocalSpoolingManager doesn't support direct storage access
                 addExtraProperty("protocol.spooling.retrieval-mode", "coordinator_proxy");
-                setAdditionalSetup(queryRunner -> {
-                    queryRunner.installPlugin(new LocalSpoolingPlugin());
-                    queryRunner.loadSpoolingManager("test-local", Map.of());
-                });
             }
             if (withTracing) {
                 OpenTracingCollector collector = new OpenTracingCollector();
@@ -952,8 +974,8 @@ public final class DistributedQueryRunner
                 extraCloseables.add(collector);
                 addExtraProperties(Map.of(
                         "tracing.enabled", "true",
-                        "tracing.exporter.endpoint", collector.getExporterEndpoint().toString(),
-                        "tracing.exporter.protocol", "http/protobuf"));
+                        "otel.exporter.endpoint", collector.getExporterEndpoint().toString(),
+                        "otel.exporter.protocol", "http/protobuf"));
                 checkState(eventListeners.isEmpty(), "eventListeners already set");
                 setEventListener(new EventListener()
                 {
@@ -989,12 +1011,30 @@ public final class DistributedQueryRunner
             extraCloseables = null;
 
             try {
+                if (encoding.isPresent()) {
+                    queryRunner.installPlugin(new LocalSpoolingPlugin());
+                    queryRunner.loadSpoolingManager("test-local", Map.of());
+                }
+
+                if (exchangeType.isPresent()) {
+                    switch (exchangeType.get()) {
+                        case "filesystem" -> {
+                            queryRunner.installPlugin(new FileSystemExchangePlugin());
+                            Map<String, String> properties = exchangeProperties.orElse(
+                                    ImmutableMap.of("exchange.base-directories", System.getProperty("java.io.tmpdir") + "/trino-local-file-system-exchange-manager"));
+                            queryRunner.loadExchangeManager("filesystem", properties);
+                        }
+                        default -> throw new IllegalArgumentException("Unknow exchange type: " + exchangeType);
+                    }
+                }
+
                 additionalSetup.accept(queryRunner);
             }
             catch (Throwable e) {
                 closeAllSuppress(e, queryRunner);
                 throw e;
             }
+            queryRunner.getCoordinator().getInstance(Key.get(ConnectorServicesProvider.class)).loadInitialCatalogs();
 
             return queryRunner;
         }

@@ -25,6 +25,7 @@ import io.trino.execution.scheduler.NodeSchedulerConfig;
 import io.trino.memory.MemoryManagerConfig;
 import io.trino.memory.NodeMemoryConfig;
 import io.trino.operator.RetryPolicy;
+import io.trino.server.protocol.spooling.SpoolingEnabledConfig;
 import io.trino.spi.TrinoException;
 import io.trino.spi.session.PropertyMetadata;
 import io.trino.sql.planner.OptimizerConfig;
@@ -67,7 +68,6 @@ public final class SystemSessionProperties
     public static final String MAX_HASH_PARTITION_COUNT = "max_hash_partition_count";
     public static final String MIN_HASH_PARTITION_COUNT = "min_hash_partition_count";
     public static final String MIN_HASH_PARTITION_COUNT_FOR_WRITE = "min_hash_partition_count_for_write";
-    public static final String PREFER_STREAMING_OPERATORS = "prefer_streaming_operators";
     public static final String TASK_MIN_WRITER_COUNT = "task_min_writer_count";
     public static final String TASK_MAX_WRITER_COUNT = "task_max_writer_count";
     public static final String TASK_CONCURRENCY = "task_concurrency";
@@ -126,7 +126,6 @@ public final class SystemSessionProperties
     public static final String PREFER_PARTIAL_AGGREGATION = "prefer_partial_aggregation";
     public static final String OPTIMIZE_TOP_N_RANKING = "optimize_top_n_ranking";
     public static final String MAX_GROUPING_SETS = "max_grouping_sets";
-    public static final String STATISTICS_CPU_TIMER_ENABLED = "statistics_cpu_timer_enabled";
     public static final String ENABLE_STATS_CALCULATOR = "enable_stats_calculator";
     public static final String STATISTICS_PRECALCULATION_FOR_PUSHDOWN_ENABLED = "statistics_precalculation_for_pushdown_enabled";
     public static final String COLLECT_PLAN_STATISTICS_FOR_ALL_QUERIES = "collect_plan_statistics_for_all_queries";
@@ -140,7 +139,6 @@ public final class SystemSessionProperties
     public static final String COMPLEX_EXPRESSION_PUSHDOWN = "complex_expression_pushdown";
     public static final String PREDICATE_PUSHDOWN_USE_TABLE_PROPERTIES = "predicate_pushdown_use_table_properties";
     public static final String ENABLE_DYNAMIC_FILTERING = "enable_dynamic_filtering";
-    public static final String ENABLE_LARGE_DYNAMIC_FILTERS = "enable_large_dynamic_filters";
     public static final String ENABLE_DYNAMIC_ROW_FILTERING = "enable_dynamic_row_filtering";
     public static final String DYNAMIC_ROW_FILTERING_SELECTIVITY_THRESHOLD = "dynamic_row_filtering_selectivity_threshold";
     public static final String QUERY_MAX_MEMORY_PER_NODE = "query_max_memory_per_node";
@@ -150,7 +148,6 @@ public final class SystemSessionProperties
     public static final String REQUIRED_WORKERS_COUNT = "required_workers_count";
     public static final String REQUIRED_WORKERS_MAX_WAIT_TIME = "required_workers_max_wait_time";
     public static final String COST_ESTIMATION_WORKER_COUNT = "cost_estimation_worker_count";
-    public static final String OMIT_DATETIME_TYPE_PRECISION = "omit_datetime_type_precision";
     public static final String USE_LEGACY_WINDOW_FILTER_PUSHDOWN = "use_legacy_window_filter_pushdown";
     public static final String MAX_UNACKNOWLEDGED_SPLITS_PER_TASK = "max_unacknowledged_splits_per_task";
     public static final String MERGE_PROJECT_WITH_VALUES = "merge_project_with_values";
@@ -220,6 +217,9 @@ public final class SystemSessionProperties
     public static final String CLOSE_IDLE_WRITERS_TRIGGER_DURATION = "close_idle_writers_trigger_duration";
     public static final String COLUMNAR_FILTER_EVALUATION_ENABLED = "columnar_filter_evaluation_enabled";
     public static final String SPOOLING_ENABLED = "spooling_enabled";
+    public static final String DEBUG_ADAPTIVE_PLANNER = "debug_adaptive_planner";
+    public static final String SOURCE_PAGES_VALIDATION_ENABLED = "output_pages_validation_enabled";
+    public static final String SPOOLING_UNSUPPORTED_WARNING = "spooling_unsupported_warning";
 
     private final List<PropertyMetadata<?>> sessionProperties;
 
@@ -227,6 +227,7 @@ public final class SystemSessionProperties
     {
         this(
                 new QueryManagerConfig(),
+                new SpoolingEnabledConfig(),
                 new TaskManagerConfig(),
                 new MemoryManagerConfig(),
                 new FeaturesConfig(),
@@ -239,6 +240,7 @@ public final class SystemSessionProperties
     @Inject
     public SystemSessionProperties(
             QueryManagerConfig queryManagerConfig,
+            SpoolingEnabledConfig spoolingEnabledConfig,
             TaskManagerConfig taskManagerConfig,
             MemoryManagerConfig memoryManagerConfig,
             FeaturesConfig featuresConfig,
@@ -295,11 +297,6 @@ public final class SystemSessionProperties
                         "Minimum number of partitions for distributed joins and aggregations in write queries",
                         queryManagerConfig.getMinHashPartitionCountForWrite(),
                         value -> validateIntegerValue(value, MIN_HASH_PARTITION_COUNT_FOR_WRITE, 1, false),
-                        false),
-                booleanProperty(
-                        PREFER_STREAMING_OPERATORS,
-                        "Prefer source table layouts that produce streaming operators",
-                        false,
                         false),
                 integerProperty(
                         TASK_MIN_WRITER_COUNT,
@@ -605,11 +602,6 @@ public final class SystemSessionProperties
                         featuresConfig.getMaxGroupingSets(),
                         true),
                 booleanProperty(
-                        STATISTICS_CPU_TIMER_ENABLED,
-                        "Experimental: Enable cpu time tracking for automatic column statistics collection on write",
-                        taskManagerConfig.isStatisticsCpuTimerEnabled(),
-                        false),
-                booleanProperty(
                         ENABLE_STATS_CALCULATOR,
                         "Enable statistics calculator",
                         optimizerConfig.isEnableStatsCalculator(),
@@ -684,11 +676,6 @@ public final class SystemSessionProperties
                         dynamicFilterConfig.isEnableDynamicFiltering(),
                         false),
                 booleanProperty(
-                        ENABLE_LARGE_DYNAMIC_FILTERS,
-                        "Enable collection of large dynamic filters",
-                        dynamicFilterConfig.isEnableLargeDynamicFilters(),
-                        false),
-                booleanProperty(
                         ENABLE_DYNAMIC_ROW_FILTERING,
                         "Enable fine-grained filtering of rows in the scan operator using dynamic filters",
                         dynamicFilterConfig.isEnableDynamicRowFiltering(),
@@ -740,11 +727,6 @@ public final class SystemSessionProperties
                         value -> validateIntegerValue(value, COST_ESTIMATION_WORKER_COUNT, 1, true),
                         true),
                 booleanProperty(
-                        OMIT_DATETIME_TYPE_PRECISION,
-                        "Omit precision when rendering datetime type names with default precision",
-                        featuresConfig.isOmitDateTimeTypePrecision(),
-                        false),
-                booleanProperty(
                         USE_LEGACY_WINDOW_FILTER_PUSHDOWN,
                         "Use legacy window filter pushdown optimizer",
                         optimizerConfig.isUseLegacyWindowFilterPushdown(),
@@ -793,6 +775,11 @@ public final class SystemSessionProperties
                         "Retry policy",
                         RetryPolicy.class,
                         queryManagerConfig.getRetryPolicy(),
+                        value -> {
+                            if (!queryManagerConfig.getAllowedRetryPolicies().contains(value)) {
+                                throw new TrinoException(INVALID_SESSION_PROPERTY, format("Retry policy %s not allowed. Must be one of %s", value, queryManagerConfig.getAllowedRetryPolicies()));
+                            }
+                        },
                         true),
                 integerProperty(
                         QUERY_RETRY_ATTEMPTS,
@@ -1134,7 +1121,27 @@ public final class SystemSessionProperties
                         SPOOLING_ENABLED,
                         "Enable client spooling protocol",
                         true,
-                        true));
+                        true),
+                booleanProperty(
+                        DEBUG_ADAPTIVE_PLANNER,
+                        "Enable debug information for the adaptive planner",
+                        false,
+                        true),
+                booleanProperty(
+                        SOURCE_PAGES_VALIDATION_ENABLED,
+                        "Runtime validation of blocks in source pages",
+                        queryManagerConfig.isSourcePagesValidationEnabled(),
+                        true),
+                booleanProperty(
+                        SPOOLING_UNSUPPORTED_WARNING,
+                        "Generate warning when client lacks support for spooling protocol",
+                        spoolingEnabledConfig.isEnabled() && spoolingEnabledConfig.isUnsupportedWarningEnabled(),
+                        _ -> {
+                            if (!spoolingEnabledConfig.isEnabled()) {
+                                throw new TrinoException(INVALID_SESSION_PROPERTY, format("%s cannot be set when spooling is disabled", SPOOLING_UNSUPPORTED_WARNING));
+                            }
+                        },
+                        false));
     }
 
     @Override
@@ -1181,11 +1188,6 @@ public final class SystemSessionProperties
     public static int getMinHashPartitionCountForWrite(Session session)
     {
         return session.getSystemProperty(MIN_HASH_PARTITION_COUNT_FOR_WRITE, Integer.class);
-    }
-
-    public static boolean preferStreamingOperators(Session session)
-    {
-        return session.getSystemProperty(PREFER_STREAMING_OPERATORS, Boolean.class);
     }
 
     public static int getTaskMinWriterCount(Session session)
@@ -1564,11 +1566,6 @@ public final class SystemSessionProperties
         return doubleValue;
     }
 
-    public static boolean isStatisticsCpuTimerEnabled(Session session)
-    {
-        return session.getSystemProperty(STATISTICS_CPU_TIMER_ENABLED, Boolean.class);
-    }
-
     public static boolean isEnableStatsCalculator(Session session)
     {
         return session.getSystemProperty(ENABLE_STATS_CALCULATOR, Boolean.class);
@@ -1629,11 +1626,6 @@ public final class SystemSessionProperties
         return session.getSystemProperty(ENABLE_DYNAMIC_FILTERING, Boolean.class);
     }
 
-    public static boolean isEnableLargeDynamicFilters(Session session)
-    {
-        return session.getSystemProperty(ENABLE_LARGE_DYNAMIC_FILTERS, Boolean.class);
-    }
-
     public static boolean isEnableDynamicRowFiltering(Session session)
     {
         return session.getSystemProperty(ENABLE_DYNAMIC_ROW_FILTERING, Boolean.class);
@@ -1677,11 +1669,6 @@ public final class SystemSessionProperties
     public static Integer getCostEstimationWorkerCount(Session session)
     {
         return session.getSystemProperty(COST_ESTIMATION_WORKER_COUNT, Integer.class);
-    }
-
-    public static boolean isOmitDateTimeTypePrecision(Session session)
-    {
-        return session.getSystemProperty(OMIT_DATETIME_TYPE_PRECISION, Boolean.class);
     }
 
     public static boolean useLegacyWindowFilterPushdown(Session session)
@@ -2032,5 +2019,20 @@ public final class SystemSessionProperties
     public static boolean isUnsafePushdownAllowed(Session session)
     {
         return session.getSystemProperty(ALLOW_UNSAFE_PUSHDOWN, Boolean.class);
+    }
+
+    public static boolean isDebugAdaptivePlannerEnabled(Session session)
+    {
+        return session.getSystemProperty(DEBUG_ADAPTIVE_PLANNER, Boolean.class);
+    }
+
+    public static boolean isSourcePagesValidationEnabled(Session session)
+    {
+        return session.getSystemProperty(SOURCE_PAGES_VALIDATION_ENABLED, Boolean.class);
+    }
+
+    public static boolean isSpoolingUnsupportedWarningEnabled(Session session)
+    {
+        return session.getSystemProperty(SPOOLING_UNSUPPORTED_WARNING, Boolean.class);
     }
 }

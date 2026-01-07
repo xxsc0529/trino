@@ -20,7 +20,6 @@ import io.trino.Session;
 import io.trino.filesystem.FileIterator;
 import io.trino.filesystem.Location;
 import io.trino.filesystem.TrinoFileSystem;
-import io.trino.plugin.iceberg.fileio.ForwardingFileIo;
 import io.trino.testing.BaseConnectorSmokeTest;
 import io.trino.testing.TestingConnectorBehavior;
 import io.trino.testing.sql.TestTable;
@@ -57,6 +56,8 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.concurrent.MoreFutures.tryGetFutureValue;
+import static io.trino.plugin.iceberg.IcebergSessionProperties.COLLECT_EXTENDED_STATISTICS_ON_WRITE;
+import static io.trino.plugin.iceberg.IcebergTestUtils.FILE_IO_FACTORY;
 import static io.trino.plugin.iceberg.IcebergTestUtils.getFileSystemFactory;
 import static io.trino.plugin.iceberg.IcebergTestUtils.getMetadataFileAndUpdatedMillis;
 import static io.trino.plugin.iceberg.IcebergTestUtils.withSmallRowGroups;
@@ -115,8 +116,7 @@ public abstract class BaseIcebergConnectorSmokeTest
                         "WITH \\(\n" +
                         "   format = '" + format.name() + "',\n" +
                         "   format_version = 2,\n" +
-                        format("   location = '.*/" + schemaName + "/region.*',\n" +
-                        "   max_commit_retry = 4\n") +
+                        "   location = '.*/" + schemaName + "/region.*'\n" +
                         "\\)");
     }
 
@@ -229,6 +229,18 @@ public abstract class BaseIcebergConnectorSmokeTest
     }
 
     @Test
+    public void testRecreateTableWithSameName()
+    {
+        String tableName = "test_recreate_table_" + randomNameSuffix();
+        assertUpdate("CREATE TABLE " + tableName + " AS SELECT 1 x, 'INDIA' y", 1);
+        assertQuery("SELECT * FROM " + tableName, "VALUES (1, 'INDIA')");
+        assertUpdate("DROP TABLE " + tableName);
+        assertUpdate("CREATE TABLE " + tableName + " AS SELECT 'Trino' data", 1);
+        assertQuery("SELECT * FROM " + tableName, "VALUES ('Trino')");
+        assertUpdate("DROP TABLE " + tableName);
+    }
+
+    @Test
     public void testRegisterTableWithTableLocation()
     {
         String tableName = "test_register_table_with_table_location_" + randomNameSuffix();
@@ -238,8 +250,8 @@ public abstract class BaseIcebergConnectorSmokeTest
         assertUpdate(format("INSERT INTO %s values(2, 'USA', false)", tableName), 1);
 
         String tableLocation = getTableLocation(tableName);
-        // Drop table from hive metastore and use the same table name to register again with the metadata
-        dropTableFromMetastore(tableName);
+        // Drop table from catalog and use the same table name to register again with the metadata
+        dropTableFromCatalog(tableName);
 
         assertUpdate("CALL system.register_table (CURRENT_SCHEMA, '" + tableName + "', '" + tableLocation + "')");
 
@@ -263,8 +275,8 @@ public abstract class BaseIcebergConnectorSmokeTest
         assertUpdate(format("COMMENT ON COLUMN %s.c is 'c-comment'", tableName));
 
         String tableLocation = getTableLocation(tableName);
-        // Drop table from hive metastore and use the same table name to register again with the metadata
-        dropTableFromMetastore(tableName);
+        // Drop table from catalog and use the same table name to register again with the metadata
+        dropTableFromCatalog(tableName);
 
         assertUpdate("CALL system.register_table (CURRENT_SCHEMA, '" + tableName + "', '" + tableLocation + "')");
 
@@ -285,8 +297,8 @@ public abstract class BaseIcebergConnectorSmokeTest
 
         String tableLocation = getTableLocation(tableName);
         String showCreateTableOld = (String) computeActual("SHOW CREATE TABLE " + tableName).getOnlyValue();
-        // Drop table from hive metastore and use the same table name to register again with the metadata
-        dropTableFromMetastore(tableName);
+        // Drop table from catalog and use the same table name to register again with the metadata
+        dropTableFromCatalog(tableName);
 
         assertUpdate("CALL system.register_table (CURRENT_SCHEMA, '" + tableName + "', '" + tableLocation + "')");
         String showCreateTableNew = (String) computeActual("SHOW CREATE TABLE " + tableName).getOnlyValue();
@@ -305,8 +317,8 @@ public abstract class BaseIcebergConnectorSmokeTest
         assertUpdate(format("INSERT INTO %s values(2, 'USA', false)", tableName), 1);
 
         String tableLocation = getTableLocation(tableName);
-        // Drop table from hive metastore and use the same table name to register again with the metadata
-        dropTableFromMetastore(tableName);
+        // Drop table from catalog and use the same table name to register again with the metadata
+        dropTableFromCatalog(tableName);
 
         assertUpdate("CALL system.register_table (CURRENT_SCHEMA, '" + tableName + "', '" + tableLocation + "')");
         assertUpdate(format("INSERT INTO %s values(3, 'POLAND', true)", tableName), 1);
@@ -348,7 +360,7 @@ public abstract class BaseIcebergConnectorSmokeTest
         String tableLocation = getTableLocation(tableName);
         String tableNameNew = tableName + "_new";
         // Drop table from glue metastore and use the same table name to register again with the metadata
-        dropTableFromMetastore(tableName);
+        dropTableFromCatalog(tableName);
 
         assertUpdate(format("CALL system.register_table (CURRENT_SCHEMA, '%s', '%s')", tableNameNew, tableLocation));
         assertUpdate(format("INSERT INTO %s values(3, 'POLAND', true)", tableNameNew), 1);
@@ -373,8 +385,8 @@ public abstract class BaseIcebergConnectorSmokeTest
         String tableLocation = getTableLocation(tableName);
         String metadataLocation = getMetadataLocation(tableName);
         String metadataFileName = metadataLocation.substring(metadataLocation.lastIndexOf("/") + 1);
-        // Drop table from hive metastore and use the same table name to register again with the metadata
-        dropTableFromMetastore(tableName);
+        // Drop table from catalog and use the same table name to register again with the metadata
+        dropTableFromCatalog(tableName);
 
         assertUpdate("CALL iceberg.system.register_table (CURRENT_SCHEMA, '" + tableName + "', '" + tableLocation + "', '" + metadataFileName + "')");
         assertUpdate(format("INSERT INTO %s values(3, 'POLAND', true)", tableName), 1);
@@ -391,7 +403,7 @@ public abstract class BaseIcebergConnectorSmokeTest
     public void testCreateTableWithTrailingSpaceInLocation()
     {
         String tableName = "test_create_table_with_trailing_space_" + randomNameSuffix();
-        String tableLocationWithTrailingSpace = schemaPath() + tableName + " ";
+        String tableLocationWithTrailingSpace = schemaPath() + "/" + tableName + " ";
 
         assertQuerySucceeds(format("CREATE TABLE %s WITH (location = '%s') AS SELECT 1 AS a, 'INDIA' AS b, true AS c", tableName, tableLocationWithTrailingSpace));
         assertQuery("SELECT * FROM " + tableName, "VALUES (1, 'INDIA', true)");
@@ -416,7 +428,7 @@ public abstract class BaseIcebergConnectorSmokeTest
         assertThat(getTableLocation(registeredTableName)).isEqualTo(tableLocationWithTrailingSpace);
 
         assertUpdate("DROP TABLE " + registeredTableName);
-        dropTableFromMetastore(tableName);
+        dropTableFromCatalog(tableName);
     }
 
     @Test
@@ -598,7 +610,7 @@ public abstract class BaseIcebergConnectorSmokeTest
         assertUpdate("CREATE TABLE " + tableName + " AS SELECT 1 x, 'INDIA' y", 1);
 
         String metadataLocation = getMetadataLocation(tableName);
-        TableMetadata tableMetadata = TableMetadataParser.read(new ForwardingFileIo(fileSystem), metadataLocation);
+        TableMetadata tableMetadata = TableMetadataParser.read(FILE_IO_FACTORY.create(fileSystem), metadataLocation);
         Location tableLocation = Location.of(tableMetadata.location());
         Location currentSnapshotFile = Location.of(tableMetadata.currentSnapshot().manifestListLocation());
 
@@ -624,7 +636,7 @@ public abstract class BaseIcebergConnectorSmokeTest
         assertUpdate("CREATE TABLE " + tableName + " AS SELECT 1 x, 'INDIA' y", 1);
 
         String metadataLocation = getMetadataLocation(tableName);
-        FileIO fileIo = new ForwardingFileIo(fileSystem);
+        FileIO fileIo = FILE_IO_FACTORY.create(fileSystem);
         TableMetadata tableMetadata = TableMetadataParser.read(fileIo, metadataLocation);
         Location tableLocation = Location.of(tableMetadata.location());
         Location manifestListFile = Location.of(tableMetadata.currentSnapshot().allManifests(fileIo).get(0).path());
@@ -848,8 +860,8 @@ public abstract class BaseIcebergConnectorSmokeTest
         int metadataPreviousVersionCount = 5;
         String tableName = "test_metadata_delete_after_commit_enabled" + randomNameSuffix();
         assertUpdate("CREATE TABLE " + tableName + "(_bigint BIGINT, _varchar VARCHAR)");
-        assertUpdate("ALTER TABLE " + tableName + " SET PROPERTIES extra_properties = MAP(ARRAY['write.metadata.delete-after-commit.enabled'], ARRAY['true'])");
-        assertUpdate("ALTER TABLE " + tableName + " SET PROPERTIES extra_properties = MAP(ARRAY['write.metadata.previous-versions-max'], ARRAY['" + metadataPreviousVersionCount + "'])");
+        assertUpdate("ALTER TABLE " + tableName + " SET PROPERTIES delete_after_commit_enabled = true");
+        assertUpdate("ALTER TABLE " + tableName + " SET PROPERTIES max_previous_versions = " + metadataPreviousVersionCount);
         String tableLocation = getTableLocation(tableName);
 
         Map<String, Long> historyMetadataFiles = getMetadataFileAndUpdatedMillis(fileSystem, tableLocation);
@@ -892,6 +904,34 @@ public abstract class BaseIcebergConnectorSmokeTest
             dropSchema(firstSchema);
             dropSchema(secondSchema);
         }
+    }
+
+    @Test
+    public void testAnalyze()
+    {
+        Session noStatsOnWrite = Session.builder(getSession())
+                .setCatalogSessionProperty("iceberg", COLLECT_EXTENDED_STATISTICS_ON_WRITE, "false")
+                .build();
+
+        try (TestTable table = newTrinoTable("test_analyze", "(id int)")) {
+            assertUpdate(noStatsOnWrite, "INSERT INTO " + table.getName() + " VALUES 1, 2, 3", 3);
+
+            try {
+                assertUpdate("ANALYZE " + table.getName());
+            }
+            catch (Exception e) {
+                verifyAnalyzeFailurePermissible(e);
+                return;
+            }
+            assertThat(query("SHOW STATS FOR " + table.getName())).result()
+                    .projected("column_name", "distinct_values_count")
+                    .matches("VALUES (VARCHAR 'id', 3e0), (null, null)");
+        }
+    }
+
+    protected void verifyAnalyzeFailurePermissible(Exception e)
+    {
+        throw new AssertionError("Unexpected analyze failure", e);
     }
 
     protected void dropSchema(String schema)
@@ -947,7 +987,7 @@ public abstract class BaseIcebergConnectorSmokeTest
         throw new IllegalStateException("Location not found in SHOW CREATE TABLE result");
     }
 
-    protected abstract void dropTableFromMetastore(String tableName);
+    protected abstract void dropTableFromCatalog(String tableName);
 
     protected abstract String getMetadataLocation(String tableName);
 

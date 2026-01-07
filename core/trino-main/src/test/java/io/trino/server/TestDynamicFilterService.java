@@ -18,6 +18,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.units.DataSize;
 import io.trino.Session;
+import io.trino.connector.TestingColumnHandle;
 import io.trino.cost.StatsAndCosts;
 import io.trino.execution.DynamicFilterConfig;
 import io.trino.execution.StageId;
@@ -26,7 +27,6 @@ import io.trino.operator.RetryPolicy;
 import io.trino.spi.QueryId;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.DynamicFilter;
-import io.trino.spi.connector.TestingColumnHandle;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.predicate.ValueSet;
@@ -64,7 +64,6 @@ import java.util.stream.LongStream;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.airlift.units.DataSize.Unit.KILOBYTE;
-import static io.trino.SystemSessionProperties.ENABLE_LARGE_DYNAMIC_FILTERS;
 import static io.trino.SystemSessionProperties.RETRY_POLICY;
 import static io.trino.metadata.TestMetadataManager.createTestMetadataManager;
 import static io.trino.server.DynamicFilterService.DynamicFilterDomainStats;
@@ -94,7 +93,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class TestDynamicFilterService
 {
     private static final Session session = TestingSession.testSessionBuilder()
-            .setSystemProperty(ENABLE_LARGE_DYNAMIC_FILTERS, "false")
             .build();
 
     @Test
@@ -839,8 +837,7 @@ public class TestDynamicFilterService
     {
         DataSize sizeLimit = DataSize.of(1, KILOBYTE);
         DynamicFilterConfig config = new DynamicFilterConfig();
-        config.setEnableLargeDynamicFilters(false)
-                .setSmallMaxSizePerFilter(sizeLimit);
+        config.setMaxSizePerFilter(sizeLimit);
         DynamicFilterService dynamicFilterService = new DynamicFilterService(
                 PLANNER_CONTEXT.getMetadata(),
                 PLANNER_CONTEXT.getFunctionManager(),
@@ -1060,7 +1057,7 @@ public class TestDynamicFilterService
                         Optional.empty()),
                 ImmutableSet.of(symbol),
                 stagePartitioning,
-                Optional.empty(),
+                OptionalInt.empty(),
                 ImmutableList.of(tableScanNodeId),
                 new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), ImmutableList.of(symbol)),
                 OptionalInt.empty(),

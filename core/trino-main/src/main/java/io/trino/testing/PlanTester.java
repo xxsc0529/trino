@@ -27,6 +27,7 @@ import io.trino.Session;
 import io.trino.SystemSessionProperties;
 import io.trino.client.NodeVersion;
 import io.trino.connector.CatalogFactory;
+import io.trino.connector.CatalogHandle;
 import io.trino.connector.CatalogServiceProviderModule;
 import io.trino.connector.ConnectorServicesProvider;
 import io.trino.connector.CoordinatorDynamicCatalogManager;
@@ -59,6 +60,7 @@ import io.trino.cost.StatsNormalizer;
 import io.trino.cost.TaskCountEstimator;
 import io.trino.eventlistener.EventListenerConfig;
 import io.trino.eventlistener.EventListenerManager;
+import io.trino.exchange.ExchangeManagerConfig;
 import io.trino.exchange.ExchangeManagerRegistry;
 import io.trino.execution.DynamicFilterConfig;
 import io.trino.execution.NodeTaskMap;
@@ -106,6 +108,7 @@ import io.trino.metadata.TableProceduresRegistry;
 import io.trino.metadata.TablePropertyManager;
 import io.trino.metadata.TypeRegistry;
 import io.trino.metadata.ViewPropertyManager;
+import io.trino.node.InternalNode;
 import io.trino.node.InternalNodeManager;
 import io.trino.node.TestingInternalNodeManager;
 import io.trino.operator.Driver;
@@ -113,6 +116,7 @@ import io.trino.operator.DriverContext;
 import io.trino.operator.DriverFactory;
 import io.trino.operator.FlatHashStrategyCompiler;
 import io.trino.operator.GroupByHashPageIndexerFactory;
+import io.trino.operator.NullSafeHashCompiler;
 import io.trino.operator.OutputFactory;
 import io.trino.operator.PagesIndex;
 import io.trino.operator.PagesIndexPageSorter;
@@ -137,11 +141,11 @@ import io.trino.server.security.HeaderAuthenticatorConfig;
 import io.trino.server.security.HeaderAuthenticatorManager;
 import io.trino.server.security.PasswordAuthenticatorConfig;
 import io.trino.server.security.PasswordAuthenticatorManager;
+import io.trino.simd.BlockEncodingSimdSupport;
 import io.trino.spi.PageIndexerFactory;
 import io.trino.spi.PageSorter;
 import io.trino.spi.Plugin;
 import io.trino.spi.catalog.CatalogName;
-import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.Connector;
 import io.trino.spi.connector.ConnectorFactory;
 import io.trino.spi.connector.ConnectorName;
@@ -160,9 +164,7 @@ import io.trino.sql.analyzer.Analysis;
 import io.trino.sql.analyzer.Analyzer;
 import io.trino.sql.analyzer.AnalyzerFactory;
 import io.trino.sql.analyzer.QueryExplainerFactory;
-import io.trino.sql.analyzer.SessionTimeProvider;
 import io.trino.sql.analyzer.StatementAnalyzerFactory;
-import io.trino.sql.gen.CursorProcessorCompiler;
 import io.trino.sql.gen.ExpressionCompiler;
 import io.trino.sql.gen.JoinCompiler;
 import io.trino.sql.gen.JoinFilterFunctionCompiler;
@@ -213,6 +215,7 @@ import org.intellij.lang.annotations.Language;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -271,6 +274,8 @@ import static java.util.concurrent.Executors.newScheduledThreadPool;
 public class PlanTester
         implements Closeable
 {
+    public static final BlockEncodingManager TESTING_BLOCK_ENCODING_MANAGER = new BlockEncodingManager(new BlockEncodingSimdSupport(true));
+
     private final Session defaultSession;
     private final ExecutorService notificationExecutor;
     private final ScheduledExecutorService yieldExecutor;
@@ -278,9 +283,9 @@ public class PlanTester
 
     private final SqlParser sqlParser;
     private final PlanFragmenter planFragmenter;
-    private final InternalNodeManager nodeManager;
     private final TypeOperators typeOperators;
     private final BlockTypeOperators blockTypeOperators;
+    private final NullSafeHashCompiler hashCompiler;
     private final PlannerContext plannerContext;
     private final GlobalFunctionCatalog globalFunctionCatalog;
     private final StatsCalculator statsCalculator;
@@ -305,7 +310,6 @@ public class PlanTester
     private final AnalyzePropertyManager analyzePropertyManager;
 
     private final PageFunctionCompiler pageFunctionCompiler;
-    private final ColumnarFilterCompiler filterCompiler;
     private final ExpressionCompiler expressionCompiler;
     private final JoinFilterFunctionCompiler joinFilterFunctionCompiler;
     private final JoinCompiler joinCompiler;
@@ -314,7 +318,6 @@ public class PlanTester
     private final CoordinatorDynamicCatalogManager catalogManager;
     private final PluginManager pluginManager;
     private final ExchangeManagerRegistry exchangeManagerRegistry;
-    private final SpoolingManagerRegistry spoolingManagerRegistry;
     private final TaskManagerConfig taskManagerConfig;
     private final OptimizerConfig optimizerConfig;
     private final StatementAnalyzerFactory statementAnalyzerFactory;
@@ -343,8 +346,9 @@ public class PlanTester
 
         this.typeOperators = new TypeOperators();
         this.blockTypeOperators = new BlockTypeOperators(typeOperators);
+        this.hashCompiler = new NullSafeHashCompiler(typeOperators);
         this.sqlParser = new SqlParser();
-        this.nodeManager = TestingInternalNodeManager.createDefault();
+        InternalNodeManager nodeManager = TestingInternalNodeManager.createDefault();
         PageSorter pageSorter = new PagesIndexPageSorter(new PagesIndex.TestingFactory(false));
         NodeSchedulerConfig nodeSchedulerConfig = new NodeSchedulerConfig().setIncludeCoordinator(true);
         this.optimizerConfig = new OptimizerConfig();
@@ -357,10 +361,9 @@ public class PlanTester
                 catalogManager,
                 notificationExecutor);
 
-        BlockEncodingManager blockEncodingManager = new BlockEncodingManager();
         TypeRegistry typeRegistry = new TypeRegistry(typeOperators, new FeaturesConfig());
         TypeManager typeManager = new InternalTypeManager(typeRegistry);
-        InternalBlockEncodingSerde blockEncodingSerde = new InternalBlockEncodingSerde(blockEncodingManager, typeManager);
+        InternalBlockEncodingSerde blockEncodingSerde = new InternalBlockEncodingSerde(TESTING_BLOCK_ENCODING_MANAGER, typeManager);
         SecretsResolver secretsResolver = new SecretsResolver(ImmutableMap.of());
 
         this.globalFunctionCatalog = new GlobalFunctionCatalog(
@@ -383,10 +386,11 @@ public class PlanTester
                 globalFunctionCatalog,
                 languageFunctionManager,
                 tableFunctionRegistry,
-                typeManager);
+                typeManager,
+                catalogManager);
         typeRegistry.addType(new JsonPath2016Type(new TypeDeserializer(typeManager), blockEncodingSerde));
         this.joinCompiler = new JoinCompiler(typeOperators);
-        this.hashStrategyCompiler = new FlatHashStrategyCompiler(typeOperators);
+        this.hashStrategyCompiler = new FlatHashStrategyCompiler(typeOperators, new NullSafeHashCompiler(typeOperators));
         PageIndexerFactory pageIndexerFactory = new GroupByHashPageIndexerFactory(hashStrategyCompiler);
         EventListenerManager eventListenerManager = new EventListenerManager(new EventListenerConfig(), secretsResolver, noop(), tracer, CURRENT_NODE.getNodeVersion());
         this.accessControl = new TestingAccessControlManager(transactionManager, eventListenerManager, secretsResolver);
@@ -414,7 +418,7 @@ public class PlanTester
         NodeScheduler nodeScheduler = new NodeScheduler(new UniformNodeSelectorFactory(CURRENT_NODE, nodeManager, nodeSchedulerConfig, new NodeTaskMap(finalizerService)));
         this.sessionPropertyManager = createSessionPropertyManager(catalogManager, taskManagerConfig, optimizerConfig);
         this.nodePartitioningManager = new NodePartitioningManager(nodeScheduler, createNodePartitioningProvider(catalogManager));
-        this.partitionFunctionProvider = new PartitionFunctionProvider(typeOperators, createNodePartitioningProvider(catalogManager));
+        this.partitionFunctionProvider = new PartitionFunctionProvider(hashCompiler, createNodePartitioningProvider(catalogManager));
         TableProceduresRegistry tableProceduresRegistry = new TableProceduresRegistry(createTableProceduresProvider(catalogManager));
         FunctionManager functionManager = new FunctionManager(createFunctionProvider(catalogManager), globalFunctionCatalog, languageFunctionManager);
         this.schemaPropertyManager = createSchemaPropertyManager(catalogManager);
@@ -434,14 +438,13 @@ public class PlanTester
 
         this.plannerContext = new PlannerContext(metadata, typeOperators, blockEncodingSerde, typeManager, functionManager, languageFunctionManager, tracer);
         this.pageFunctionCompiler = new PageFunctionCompiler(functionManager, 0);
-        this.filterCompiler = new ColumnarFilterCompiler(functionManager, 0);
-        this.expressionCompiler = new ExpressionCompiler(new CursorProcessorCompiler(functionManager), pageFunctionCompiler, filterCompiler);
+        ColumnarFilterCompiler filterCompiler = new ColumnarFilterCompiler(functionManager, 0);
+        this.expressionCompiler = new ExpressionCompiler(pageFunctionCompiler, filterCompiler);
         this.joinFilterFunctionCompiler = new JoinFilterFunctionCompiler(functionManager);
 
         this.statementAnalyzerFactory = new StatementAnalyzerFactory(
                 plannerContext,
                 sqlParser,
-                SessionTimeProvider.DEFAULT,
                 accessControl,
                 transactionManager,
                 groupProvider,
@@ -472,8 +475,13 @@ public class PlanTester
                 ImmutableSet.of(),
                 ImmutableSet.of(new ExcludeColumnsFunction()));
 
-        exchangeManagerRegistry = new ExchangeManagerRegistry(noop(), noopTracer(), secretsResolver);
-        spoolingManagerRegistry = new SpoolingManagerRegistry(new ServerConfig(), new SpoolingEnabledConfig(), noop(), noopTracer());
+        exchangeManagerRegistry = new ExchangeManagerRegistry(noop(), noopTracer(), secretsResolver, new ExchangeManagerConfig());
+        SpoolingManagerRegistry spoolingManagerRegistry = new SpoolingManagerRegistry(
+                new InternalNode("nodeId", URI.create("http://localhost:8080"), NodeVersion.UNKNOWN, false),
+                new ServerConfig(),
+                new SpoolingEnabledConfig(),
+                noop(),
+                noopTracer());
         this.pluginManager = new PluginManager(
                 (loader, createClassLoader) -> {},
                 Optional.empty(),
@@ -489,7 +497,7 @@ public class PlanTester
                 new GroupProviderManager(secretsResolver),
                 new SessionPropertyDefaults(nodeInfo, accessControl, secretsResolver),
                 typeRegistry,
-                blockEncodingManager,
+                TESTING_BLOCK_ENCODING_MANAGER,
                 new HandleResolver(),
                 exchangeManagerRegistry,
                 spoolingManagerRegistry);
@@ -535,6 +543,7 @@ public class PlanTester
     {
         SystemSessionProperties sessionProperties = new SystemSessionProperties(
                 new QueryManagerConfig(),
+                new SpoolingEnabledConfig(),
                 taskManagerConfig,
                 new MemoryManagerConfig(),
                 new FeaturesConfig(),
@@ -782,6 +791,7 @@ public class PlanTester
                 new DynamicFilterConfig(),
                 blockTypeOperators,
                 typeOperators,
+                hashCompiler,
                 tableExecuteContextManager,
                 exchangeManagerRegistry,
                 CURRENT_NODE.getNodeVersion(),

@@ -13,18 +13,15 @@
  */
 package io.trino.plugin.iceberg.catalog.rest;
 
-import com.google.common.collect.ImmutableMap;
 import com.google.inject.Binder;
 import com.google.inject.Scopes;
 import io.airlift.configuration.AbstractConfigurationAwareModule;
 import io.trino.plugin.iceberg.IcebergConfig;
 import io.trino.plugin.iceberg.IcebergFileSystemFactory;
 import io.trino.plugin.iceberg.catalog.TrinoCatalogFactory;
-import io.trino.plugin.iceberg.catalog.rest.IcebergRestCatalogConfig.Security;
 import io.trino.spi.TrinoException;
 
 import static com.google.inject.multibindings.OptionalBinder.newOptionalBinder;
-import static io.airlift.configuration.ConditionalModule.conditionalModule;
 import static io.airlift.configuration.ConfigBinder.configBinder;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 
@@ -35,19 +32,12 @@ public class IcebergRestCatalogModule
     protected void setup(Binder binder)
     {
         configBinder(binder).bindConfig(IcebergRestCatalogConfig.class);
-        install(conditionalModule(
-                IcebergRestCatalogConfig.class,
-                config -> config.getSecurity() == Security.OAUTH2,
-                new OAuth2SecurityModule(),
-                new NoneSecurityModule()));
-        install(conditionalModule(
-                IcebergRestCatalogConfig.class,
-                IcebergRestCatalogConfig::isSigV4Enabled,
-                internalBinder -> {
-                    configBinder(internalBinder).bindConfig(IcebergRestCatalogSigV4Config.class);
-                    internalBinder.bind(AwsProperties.class).to(SigV4AwsProperties.class).in(Scopes.SINGLETON);
-                },
-                internalBinder -> internalBinder.bind(AwsProperties.class).toInstance(ImmutableMap::of)));
+        install(switch (buildConfigObject(IcebergRestCatalogConfig.class).getSecurity()) {
+            case OAUTH2 -> new OAuth2SecurityModule();
+            case SIGV4 -> new SigV4SecurityModule();
+            case GOOGLE -> new GoogleSecurityModule();
+            case NONE -> new NoneSecurityModule();
+        });
 
         binder.bind(TrinoCatalogFactory.class).to(TrinoIcebergRestCatalogFactory.class).in(Scopes.SINGLETON);
         newOptionalBinder(binder, IcebergFileSystemFactory.class).setBinding().to(IcebergRestCatalogFileSystemFactory.class).in(Scopes.SINGLETON);

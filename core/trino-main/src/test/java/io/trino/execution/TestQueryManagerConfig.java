@@ -17,13 +17,16 @@ import com.google.common.collect.ImmutableMap;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.trino.operator.RetryPolicy;
+import jakarta.validation.constraints.AssertTrue;
 import org.junit.jupiter.api.Test;
 
+import java.util.EnumSet;
 import java.util.Map;
 
 import static io.airlift.configuration.testing.ConfigAssertions.assertFullMapping;
 import static io.airlift.configuration.testing.ConfigAssertions.assertRecordedDefaults;
 import static io.airlift.configuration.testing.ConfigAssertions.recordDefaults;
+import static io.airlift.testing.ValidationAssertions.assertFailsValidation;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.KILOBYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
@@ -76,6 +79,7 @@ public class TestQueryManagerConfig
                 .setRequiredWorkers(1)
                 .setRequiredWorkersMaxWait(new Duration(5, MINUTES))
                 .setRetryPolicy(RetryPolicy.NONE)
+                .setAllowedRetryPolicies(EnumSet.allOf(RetryPolicy.class))
                 .setQueryRetryAttempts(4)
                 .setTaskRetryAttemptsPerTask(4)
                 .setRetryInitialDelay(new Duration(10, SECONDS))
@@ -118,10 +122,11 @@ public class TestQueryManagerConfig
                 .setFaultTolerantExecutionSmallStageRequireNoMorePartitions(false)
                 .setFaultTolerantExecutionStageEstimationForEagerParentEnabled(true)
                 .setFaultTolerantExecutionAdaptiveQueryPlanningEnabled(true)
-                .setFaultTolerantExecutionAdaptiveJoinReorderingEnabled(true)
+                .setFaultTolerantExecutionAdaptiveJoinReorderingEnabled(false)
                 .setFaultTolerantExecutionAdaptiveJoinReorderingMinSizeThreshold(DataSize.of(5, GIGABYTE))
                 .setFaultTolerantExecutionAdaptiveJoinReorderingSizeDifferenceRatio(1.5)
-                .setMaxWriterTaskCount(100));
+                .setMaxWriterTaskCount(100)
+                .setSourcePagesValidationEnabled(true));
     }
 
     @Test
@@ -160,6 +165,7 @@ public class TestQueryManagerConfig
                 .put("query-manager.required-workers", "333")
                 .put("query-manager.required-workers-max-wait", "33m")
                 .put("retry-policy", "QUERY")
+                .put("retry-policy.allowed", "QUERY,TASK")
                 .put("query-retry-attempts", "0")
                 .put("task-retry-attempts-per-task", "9")
                 .put("retry-initial-delay", "1m")
@@ -203,9 +209,10 @@ public class TestQueryManagerConfig
                 .put("fault-tolerant-execution-small-stage-require-no-more-partitions", "true")
                 .put("fault-tolerant-execution-stage-estimation-for-eager-parent-enabled", "false")
                 .put("fault-tolerant-execution-adaptive-query-planning-enabled", "false")
-                .put("fault-tolerant-execution-adaptive-join-reordering-enabled", "false")
+                .put("fault-tolerant-execution-adaptive-join-reordering-enabled", "true")
                 .put("fault-tolerant-execution-adaptive-join-reordering-min-size-threshold", "1GB")
                 .put("fault-tolerant-execution-adaptive-join-reordering-size-difference-ratio", "2")
+                .put("source-pages-validation-enabled", "false")
                 .buildOrThrow();
 
         QueryManagerConfig expected = new QueryManagerConfig()
@@ -241,6 +248,7 @@ public class TestQueryManagerConfig
                 .setRequiredWorkers(333)
                 .setRequiredWorkersMaxWait(new Duration(33, MINUTES))
                 .setRetryPolicy(RetryPolicy.QUERY)
+                .setAllowedRetryPolicies(EnumSet.of(RetryPolicy.QUERY, RetryPolicy.TASK))
                 .setQueryRetryAttempts(0)
                 .setTaskRetryAttemptsPerTask(9)
                 .setRetryInitialDelay(new Duration(1, MINUTES))
@@ -283,11 +291,24 @@ public class TestQueryManagerConfig
                 .setFaultTolerantExecutionSmallStageRequireNoMorePartitions(true)
                 .setFaultTolerantExecutionStageEstimationForEagerParentEnabled(false)
                 .setFaultTolerantExecutionAdaptiveQueryPlanningEnabled(false)
-                .setFaultTolerantExecutionAdaptiveJoinReorderingEnabled(false)
+                .setFaultTolerantExecutionAdaptiveJoinReorderingEnabled(true)
                 .setFaultTolerantExecutionAdaptiveJoinReorderingMinSizeThreshold(DataSize.of(1, GIGABYTE))
                 .setFaultTolerantExecutionAdaptiveJoinReorderingSizeDifferenceRatio(2.0)
-                .setMaxWriterTaskCount(101);
+                .setMaxWriterTaskCount(101)
+                .setSourcePagesValidationEnabled(false);
 
         assertFullMapping(properties, expected);
+    }
+
+    @Test
+    public void testAllowedRetryPoliciesValidation()
+    {
+        assertFailsValidation(
+                new QueryManagerConfig()
+                        .setAllowedRetryPolicies(EnumSet.of(RetryPolicy.NONE, RetryPolicy.TASK))
+                        .setRetryPolicy(RetryPolicy.QUERY),
+                "retryPolicyAllowed",
+                "Selected retry policy not present in retry-policy.allowed list",
+                AssertTrue.class);
     }
 }

@@ -66,7 +66,7 @@ public class TestTopNRankingOperator
     private final ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed(getClass().getSimpleName() + "-scheduledExecutor-%s"));
     private final TypeOperators typeOperators = new TypeOperators();
     private final OrderingCompiler orderingCompiler = new OrderingCompiler(typeOperators);
-    private final FlatHashStrategyCompiler hashStrategyCompiler = new FlatHashStrategyCompiler(typeOperators);
+    private final FlatHashStrategyCompiler hashStrategyCompiler = new FlatHashStrategyCompiler(typeOperators, new NullSafeHashCompiler(typeOperators));
     private final BlockTypeOperators blockTypeOperators = new BlockTypeOperators(typeOperators);
 
     @AfterAll
@@ -281,11 +281,11 @@ public class TestTopNRankingOperator
                 operatorFactory,
                 operator -> ((TopNRankingOperator) operator).getGroupedTopNBuilder() == null ? 0 : ((GroupedTopNRowNumberBuilder) ((TopNRankingOperator) operator).getGroupedTopNBuilder()).getGroupByHash().getCapacity(),
                 450_000);
-        assertThat(result.getYieldCount()).isGreaterThan(3);
-        assertThat(result.getMaxReservedBytes()).isGreaterThan(5L << 20);
+        assertThat(result.yieldCount()).isGreaterThan(3);
+        assertThat(result.maxReservedBytes()).isGreaterThan(5L << 20);
 
         int count = 0;
-        for (Page page : result.getOutput()) {
+        for (Page page : result.output()) {
             assertThat(page.getChannelCount()).isEqualTo(2);
             for (int i = 0; i < page.getPositionCount(); i++) {
                 assertThat(BIGINT.getLong(page.getBlock(1), i)).isEqualTo((byte) 1);

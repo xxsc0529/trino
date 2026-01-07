@@ -103,6 +103,7 @@ public abstract class BaseBigQueryConnectorTest
                     SUPPORTS_CREATE_MATERIALIZED_VIEW,
                     SUPPORTS_CREATE_VIEW,
                     SUPPORTS_DEFAULT_COLUMN_VALUE,
+                    SUPPORTS_LIMIT_PUSHDOWN,
                     SUPPORTS_MAP_TYPE,
                     SUPPORTS_MERGE,
                     SUPPORTS_NEGATIVE_DATE,
@@ -882,7 +883,7 @@ public abstract class BaseBigQueryConnectorTest
 
     private void assertLabelForTable(String expectedView, QueryId queryId, String traceToken)
     {
-        String expectedLabel = "q_" + queryId.toString() + "__t_" + traceToken;
+        String expectedLabel = "q_" + queryId.id() + "__t_" + traceToken;
 
         @Language("SQL")
         String checkForLabelQuery =
@@ -892,7 +893,7 @@ public abstract class BaseBigQueryConnectorTest
                 )\
                 """.formatted(expectedLabel);
 
-        assertEventually(() -> assertThat(bigQuerySqlExecutor.executeQuery(checkForLabelQuery).getValues())
+        assertEventually(new Duration(1, MINUTES), () -> assertThat(bigQuerySqlExecutor.executeQuery(checkForLabelQuery).getValues())
                 .extracting(values -> values.get("query").getStringValue())
                 .singleElement()
                 .matches(statement -> statement.contains(expectedView)));
@@ -969,7 +970,7 @@ public abstract class BaseBigQueryConnectorTest
             assertQuery("DESCRIBE test.\"" + wildcardTable + "\"", "VALUES ('value', 'varchar', '', '')");
 
             assertThat(query("SELECT * FROM test.\"" + wildcardTable + "\""))
-                    .failure().hasMessageContaining("Cannot read field of type INT64 as STRING Field: value");
+                    .failure().hasMessageContaining("Cannot read field of type INT64 as STRING");
         }
         finally {
             onBigQuery("DROP TABLE IF EXISTS test." + firstTable);
@@ -1121,6 +1122,13 @@ public abstract class BaseBigQueryConnectorTest
         }
     }
 
+    @Test // regression test for https://github.com/trinodb/trino/issues/27573
+    public void testNativeQueryWhenResultReused()
+    {
+        assertThat(query("WITH t AS (SELECT * FROM TABLE(system.query('SELECT regionkey FROM tpch.region WHERE regionkey = 0'))) SELECT * FROM t, t"))
+                .matches("VALUES (BIGINT '0', BIGINT '0')");
+    }
+
     @Test
     public void testNativeQuerySelectUnsupportedType()
     {
@@ -1233,7 +1241,7 @@ public abstract class BaseBigQueryConnectorTest
     @Test
     public void testLimitPushdownWithExternalTable()
     {
-        String externalTableName =  TEST_SCHEMA + ".region_external_table_" + randomNameSuffix();
+        String externalTableName = TEST_SCHEMA + ".region_external_table_" + randomNameSuffix();
         onBigQuery("CREATE EXTERNAL TABLE " + externalTableName + " OPTIONS (format = 'CSV', uris = ['gs://" + gcpStorageBucket + "/tpch/tiny/region.csv'])");
         try {
             assertLimitPushdownOnRegionTable(getSession(), externalTableName);
@@ -1262,7 +1270,7 @@ public abstract class BaseBigQueryConnectorTest
     @Test
     public void testLimitPushdownWithMaterializedView()
     {
-        String mvName =  TEST_SCHEMA + ".region_mv_" + randomNameSuffix();
+        String mvName = TEST_SCHEMA + ".region_mv_" + randomNameSuffix();
         onBigQuery("CREATE MATERIALIZED VIEW " + mvName + " AS SELECT * FROM tpch.region");
         try {
             // materialized view with materialization uses storage api, with storage api limit pushdown is not supported
@@ -1531,5 +1539,4 @@ public abstract class BaseBigQueryConnectorTest
     {
         bigQuerySqlExecutor.execute(sql);
     }
-
 }

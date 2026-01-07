@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.openlineage;
 
+import com.google.common.collect.ImmutableMap;
 import io.trino.operator.RetryPolicy;
 import io.trino.spi.eventlistener.QueryCompletedEvent;
 import io.trino.spi.eventlistener.QueryContext;
@@ -51,8 +52,7 @@ public class TrinoEventData
         throw new UnsupportedOperationException("This is a utility class and cannot be instantiated");
     }
 
-    static
-    {
+    static {
         queryIOMetadata = new QueryIOMetadata(Collections.emptyList(), Optional.empty());
 
         queryContext = new QueryContext(
@@ -112,8 +112,7 @@ public class TrinoEventData
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
-                0L,
-                0L,
+                Optional.empty(),
                 0L,
                 0L,
                 0L,
@@ -140,6 +139,7 @@ public class TrinoEventData
                 Collections.emptyList(),
                 Collections.emptyList(),
                 Collections.emptyList(),
+                ImmutableMap.of(),
                 Optional.empty());
 
         queryCompleteEvent = new QueryCompletedEvent(
@@ -147,6 +147,7 @@ public class TrinoEventData
                 queryStatistics,
                 queryContext,
                 queryIOMetadata,
+                Optional.empty(),
                 Optional.empty(),
                 Collections.emptyList(),
                 Instant.parse("2025-04-28T11:23:55.384424Z"),

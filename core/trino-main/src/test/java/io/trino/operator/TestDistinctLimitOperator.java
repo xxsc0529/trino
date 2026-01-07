@@ -52,7 +52,7 @@ public class TestDistinctLimitOperator
 {
     private final ExecutorService executor = newCachedThreadPool(daemonThreadsNamed(getClass().getSimpleName() + "-%s"));
     private final ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed(getClass().getSimpleName() + "-scheduledExecutor-%s"));
-    private final FlatHashStrategyCompiler hashStrategyCompiler = new FlatHashStrategyCompiler(new TypeOperators());
+    private final FlatHashStrategyCompiler hashStrategyCompiler = new FlatHashStrategyCompiler(new TypeOperators(), new NullSafeHashCompiler(new TypeOperators()));
 
     @AfterAll
     public void tearDown()
@@ -166,9 +166,9 @@ public class TestDistinctLimitOperator
                 hashStrategyCompiler);
 
         GroupByHashYieldAssertion.GroupByHashYieldResult result = finishOperatorWithYieldingGroupByHash(input, type, operatorFactory, operator -> ((DistinctLimitOperator) operator).getCapacity(), 450_000);
-        assertThat(result.getYieldCount()).isGreaterThanOrEqualTo(5);
-        assertThat(result.getMaxReservedBytes()).isGreaterThanOrEqualTo(20L << 20);
-        assertThat(result.getOutput().stream().mapToInt(Page::getPositionCount).sum()).isEqualTo(6_000 * 600);
+        assertThat(result.yieldCount()).isGreaterThanOrEqualTo(5);
+        assertThat(result.maxReservedBytes()).isGreaterThanOrEqualTo(20L << 20);
+        assertThat(result.output().stream().mapToInt(Page::getPositionCount).sum()).isEqualTo(6_000 * 600);
     }
 
     private DriverContext newDriverContext()

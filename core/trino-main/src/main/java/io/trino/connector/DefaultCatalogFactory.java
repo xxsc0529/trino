@@ -19,8 +19,6 @@ import io.airlift.configuration.secrets.SecretsResolver;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.trace.Tracer;
 import io.trino.connector.informationschema.InformationSchemaConnector;
-import io.trino.connector.system.CoordinatorSystemTablesProvider;
-import io.trino.connector.system.StaticSystemTablesProvider;
 import io.trino.connector.system.SystemConnector;
 import io.trino.connector.system.SystemTablesProvider;
 import io.trino.execution.scheduler.NodeSchedulerConfig;
@@ -31,9 +29,9 @@ import io.trino.security.AccessControl;
 import io.trino.spi.PageIndexerFactory;
 import io.trino.spi.PageSorter;
 import io.trino.spi.VersionEmbedder;
+import io.trino.spi.catalog.CatalogName;
 import io.trino.spi.catalog.CatalogProperties;
 import io.trino.spi.classloader.ThreadContextClassLoader;
-import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.Connector;
 import io.trino.spi.connector.ConnectorContext;
 import io.trino.spi.connector.ConnectorFactory;
@@ -48,8 +46,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static io.trino.spi.connector.CatalogHandle.createInformationSchemaCatalogHandle;
-import static io.trino.spi.connector.CatalogHandle.createSystemTablesCatalogHandle;
+import static io.trino.connector.CatalogHandle.createInformationSchemaCatalogHandle;
+import static io.trino.connector.CatalogHandle.createRootCatalogHandle;
+import static io.trino.connector.CatalogHandle.createSystemTablesCatalogHandle;
 import static java.util.Objects.requireNonNull;
 
 @ThreadSafe
@@ -121,14 +120,14 @@ public class DefaultCatalogFactory
         ConnectorFactory connectorFactory = connectorFactories.get(catalogProperties.connectorName());
         checkArgument(connectorFactory != null, "No factory for connector '%s'. Available factories: %s", catalogProperties.connectorName(), connectorFactories.keySet());
 
+        CatalogHandle catalogHandle = createRootCatalogHandle(catalogProperties.name(), catalogProperties.version());
         Connector connector = createConnector(
-                catalogProperties.catalogHandle().getCatalogName().toString(),
-                catalogProperties.catalogHandle(),
+                catalogProperties.name(),
                 connectorFactory,
                 secretsResolver.getResolvedConfiguration(catalogProperties.properties()));
 
         return createCatalog(
-                catalogProperties.catalogHandle(),
+                catalogHandle,
                 catalogProperties.connectorName(),
                 connector,
                 Optional.of(catalogProperties));
@@ -142,7 +141,7 @@ public class DefaultCatalogFactory
 
     private CatalogConnector createCatalog(CatalogHandle catalogHandle, ConnectorName connectorName, Connector connector, Optional<CatalogProperties> catalogProperties)
     {
-        Tracer tracer = createTracer(catalogHandle);
+        Tracer tracer = createTracer(catalogHandle.getCatalogName());
 
         ConnectorServices catalogConnector = new ConnectorServices(tracer, catalogHandle, connector);
 
@@ -156,17 +155,11 @@ public class DefaultCatalogFactory
                         accessControl,
                         maxPrefetchedInformationSchemaPrefixes));
 
-        SystemTablesProvider systemTablesProvider;
-        if (currentNode.isCoordinator()) {
-            systemTablesProvider = new CoordinatorSystemTablesProvider(
-                    transactionManager,
-                    metadata,
-                    catalogHandle.getCatalogName().toString(),
-                    new StaticSystemTablesProvider(catalogConnector.getSystemTables()));
-        }
-        else {
-            systemTablesProvider = new StaticSystemTablesProvider(catalogConnector.getSystemTables());
-        }
+        SystemTablesProvider systemTablesProvider = new SystemTablesProvider(
+                transactionManager,
+                metadata,
+                catalogHandle.getCatalogName().toString(),
+                catalogConnector.getSystemTables());
 
         ConnectorServices systemConnector = new ConnectorServices(
                 tracer,
@@ -177,7 +170,8 @@ public class DefaultCatalogFactory
                         systemTablesProvider,
                         transactionId -> transactionManager.getConnectorTransaction(transactionId, catalogHandle),
                         accessControl,
-                        catalogHandle.getCatalogName().toString()));
+                        catalogHandle.getCatalogName().toString(),
+                        catalogConnector.getPageSourceProviderFactory()));
 
         return new CatalogConnector(
                 catalogHandle,
@@ -188,16 +182,11 @@ public class DefaultCatalogFactory
                 catalogProperties);
     }
 
-    private Connector createConnector(
-            String catalogName,
-            CatalogHandle catalogHandle,
-            ConnectorFactory connectorFactory,
-            Map<String, String> properties)
+    private Connector createConnector(CatalogName catalogName, ConnectorFactory connectorFactory, Map<String, String> properties)
     {
         ConnectorContext context = new ConnectorContextInstance(
-                catalogHandle,
                 openTelemetry,
-                createTracer(catalogHandle),
+                createTracer(catalogName),
                 new DefaultNodeManager(currentNode, nodeManager, schedulerIncludeCoordinator),
                 versionEmbedder,
                 typeManager,
@@ -206,12 +195,13 @@ public class DefaultCatalogFactory
                 pageIndexerFactory);
 
         try (ThreadContextClassLoader _ = new ThreadContextClassLoader(connectorFactory.getClass().getClassLoader())) {
-            return connectorFactory.create(catalogName, properties, context);
+            // TODO: connector factory should take CatalogName
+            return connectorFactory.create(catalogName.toString(), properties, context);
         }
     }
 
-    private Tracer createTracer(CatalogHandle catalogHandle)
+    private Tracer createTracer(CatalogName catalogName)
     {
-        return openTelemetry.getTracer("trino.catalog." + catalogHandle.getCatalogName());
+        return openTelemetry.getTracer("trino.catalog." + catalogName);
     }
 }

@@ -251,8 +251,6 @@ public class TestStageStateMachine
         assertThat(stats.getPhysicalInputPositions()).isEqualTo(expectedStatsValue);
         assertThat(stats.getPhysicalInputReadTime()).isEqualTo(succinctDuration(expectedStatsValue, MILLISECONDS));
         assertThat(stats.getPhysicalInputPositions()).isEqualTo(expectedStatsValue);
-        assertThat(stats.getRawInputDataSize()).isEqualTo(succinctBytes(0));
-        assertThat(stats.getRawInputPositions()).isEqualTo(0);
         assertThat(stats.getCumulativeUserMemory()).isEqualTo(expectedStatsValue);
         assertThat(stats.getFailedCumulativeUserMemory()).isEqualTo(1);
         assertThat(stats.getTotalMemoryReservation()).isEqualTo(succinctBytes(expectedStatsValue * 2L));
@@ -309,15 +307,13 @@ public class TestStageStateMachine
                 baseValue,
                 DataSize.ofBytes(baseValue),
                 baseValue,
-                DataSize.ofBytes(baseValue),
-                baseValue,
                 new Duration(baseValue, MILLISECONDS),
                 DataSize.ofBytes(baseValue),
                 baseValue,
                 new Duration(baseValue, MILLISECONDS),
                 DataSize.ofBytes(baseValue),
                 DataSize.ofBytes(baseValue),
-                Optional.empty(),
+                OptionalInt.empty(),
                 baseValue,
                 new Duration(baseValue, MILLISECONDS),
                 pipelineContexts.stream().map(PipelineContext::getPipelineStats).collect(toImmutableList()));
@@ -396,7 +392,7 @@ public class TestStageStateMachine
                         ImmutableList.of(new Row(ImmutableList.of(new Constant(VARCHAR, Slices.utf8Slice("foo")))))),
                 ImmutableSet.of(symbol),
                 SOURCE_DISTRIBUTION,
-                Optional.empty(),
+                OptionalInt.empty(),
                 ImmutableList.of(valuesNodeId),
                 new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), ImmutableList.of(symbol)),
                 OptionalInt.empty(),

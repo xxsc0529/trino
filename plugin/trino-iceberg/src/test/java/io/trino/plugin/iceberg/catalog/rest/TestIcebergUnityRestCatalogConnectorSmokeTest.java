@@ -101,7 +101,7 @@ final class TestIcebergUnityRestCatalogConnectorSmokeTest
     }
 
     @Override
-    protected void dropTableFromMetastore(String tableName)
+    protected void dropTableFromCatalog(String tableName)
     {
         throw new UnsupportedOperationException();
     }
@@ -274,6 +274,14 @@ final class TestIcebergUnityRestCatalogConnectorSmokeTest
     public void testCreateOrReplaceTableChangeColumnNamesAndTypes()
     {
         assertThatThrownBy(super::testCreateOrReplaceTableChangeColumnNamesAndTypes)
+                .hasMessageContaining("Access Denied");
+    }
+
+    @Test
+    @Override
+    public void testRecreateTableWithSameName()
+    {
+        assertThatThrownBy(super::testRecreateTableWithSameName)
                 .hasMessageContaining("Access Denied");
     }
 
@@ -546,6 +554,14 @@ final class TestIcebergUnityRestCatalogConnectorSmokeTest
     public void testMetadataDeleteAfterCommitEnabled()
     {
         assertThatThrownBy(super::testMetadataDeleteAfterCommitEnabled)
+                .hasStackTraceContaining("Access Denied");
+    }
+
+    @Test
+    @Override
+    public void testAnalyze()
+    {
+        assertThatThrownBy(super::testAnalyze)
                 .hasStackTraceContaining("Access Denied");
     }
 }

@@ -89,7 +89,12 @@ public interface Type
 
     /**
      * For parameterized types returns the list of parameters.
+     *
+     * @deprecated Use type-specific methods to access type parameters (e.g.,
+     *             {@link ArrayType#getElementType()}, {@link MapType#getKeyType()},
+     *             {@link MapType#getValueType()}, {@link RowType#getFields()})
      */
+    @Deprecated
     List<Type> getTypeParameters();
 
     /**
@@ -183,9 +188,13 @@ public interface Type
     void writeObject(BlockBuilder blockBuilder, Object value);
 
     /**
-     * Append the value at {@code position} in {@code block} to {@code blockBuilder}.
+     * @deprecated Use {@link BlockBuilder#append}
      */
-    void appendTo(Block block, int position, BlockBuilder blockBuilder);
+    @Deprecated(forRemoval = true)
+    default void appendTo(Block block, int position, BlockBuilder blockBuilder)
+    {
+        blockBuilder.append(block.getUnderlyingValueBlock(), block.getUnderlyingValuePosition(position));
+    }
 
     /**
      * Return the range of possible values for this type, if available.

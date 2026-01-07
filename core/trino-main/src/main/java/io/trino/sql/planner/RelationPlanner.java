@@ -739,7 +739,7 @@ class RelationPlanner
         }
 
         Set<IrLabel> skipToLabels = skipTo.flatMap(SkipTo::getIdentifier)
-                .map(Identifier::getValue)
+                .map(analysis::getResolvedLabel)
                 .map(label -> rewrittenSubsets.getOrDefault(new IrLabel(label), ImmutableSet.of(new IrLabel(label))))
                 .orElse(ImmutableSet.of());
 
@@ -1758,17 +1758,11 @@ class RelationPlanner
 
         ImmutableList.Builder<Expression> rows = ImmutableList.builder();
         for (io.trino.sql.tree.Expression row : node.getRows()) {
-            if (row instanceof io.trino.sql.tree.Row value) {
-                rows.add(new Row(value.getItems().stream()
-                        .map(item -> coerceIfNecessary(analysis, item, translationMap.rewrite(item)))
-                        .collect(toImmutableList())));
+            Expression rewritten = coerceIfNecessary(analysis, row, translationMap.rewrite(row));
+            if (!(analysis.getType(row) instanceof RowType)) {
+                rewritten = new Row(ImmutableList.of(rewritten));
             }
-            else if (analysis.getType(row) instanceof RowType) {
-                rows.add(coerceIfNecessary(analysis, row, translationMap.rewrite(row)));
-            }
-            else {
-                rows.add(new Row(ImmutableList.of(coerceIfNecessary(analysis, row, translationMap.rewrite(row)))));
-            }
+            rows.add(rewritten);
         }
 
         ValuesNode valuesNode = new ValuesNode(idAllocator.getNextId(), outputSymbols, rows.build());

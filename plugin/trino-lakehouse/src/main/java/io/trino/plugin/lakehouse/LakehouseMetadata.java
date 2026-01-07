@@ -13,6 +13,7 @@
  */
 package io.trino.plugin.lakehouse;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterators;
 import io.airlift.slice.Slice;
 import io.trino.metastore.Table;
@@ -87,6 +88,8 @@ import io.trino.spi.expression.ConnectorExpression;
 import io.trino.spi.expression.Constant;
 import io.trino.spi.function.LanguageFunction;
 import io.trino.spi.function.SchemaFunctionName;
+import io.trino.spi.metrics.Metric;
+import io.trino.spi.metrics.Metrics;
 import io.trino.spi.security.GrantInfo;
 import io.trino.spi.security.Privilege;
 import io.trino.spi.security.RoleGrant;
@@ -198,9 +201,9 @@ public class LakehouseMetadata
     }
 
     @Override
-    public void executeTableExecute(ConnectorSession session, ConnectorTableExecuteHandle tableExecuteHandle)
+    public Map<String, Long> executeTableExecute(ConnectorSession session, ConnectorTableExecuteHandle tableExecuteHandle)
     {
-        forHandle(tableExecuteHandle).executeTableExecute(session, tableExecuteHandle);
+        return forHandle(tableExecuteHandle).executeTableExecute(session, tableExecuteHandle);
     }
 
     @Override
@@ -249,6 +252,25 @@ public class LakehouseMetadata
     public Optional<Object> getInfo(ConnectorSession session, ConnectorTableHandle table)
     {
         return forHandle(table).getInfo(session, table);
+    }
+
+    @Override
+    public Metrics getMetrics(ConnectorSession session)
+    {
+        ImmutableMap.Builder<String, Metric<?>> metrics = ImmutableMap.<String, Metric<?>>builder();
+        hiveMetadata.getMetrics(session).getMetrics().forEach((metricName, metric) -> {
+            metrics.put("hive." + metricName, metric);
+        });
+        icebergMetadata.getMetrics(session).getMetrics().forEach((metricName, metric) -> {
+            metrics.put("iceberg." + metricName, metric);
+        });
+        deltaMetadata.getMetrics(session).getMetrics().forEach((metricName, metric) -> {
+            metrics.put("delta." + metricName, metric);
+        });
+        hudiMetadata.getMetrics(session).getMetrics().forEach((metricName, metric) -> {
+            metrics.put("hudi." + metricName, metric);
+        });
+        return new Metrics(metrics.buildOrThrow());
     }
 
     @Override
@@ -411,6 +433,18 @@ public class LakehouseMetadata
     }
 
     @Override
+    public void setDefaultValue(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle column, String defaultValue)
+    {
+        forHandle(tableHandle).setDefaultValue(session, tableHandle, column, defaultValue);
+    }
+
+    @Override
+    public void dropDefaultValue(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle columnHandle)
+    {
+        forHandle(tableHandle).dropDefaultValue(session, tableHandle, columnHandle);
+    }
+
+    @Override
     public void setColumnType(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle column, Type type)
     {
         forHandle(tableHandle).setColumnType(session, tableHandle, column, type);
@@ -477,9 +511,9 @@ public class LakehouseMetadata
     }
 
     @Override
-    public TableStatisticsMetadata getStatisticsCollectionMetadataForWrite(ConnectorSession session, ConnectorTableMetadata tableMetadata)
+    public TableStatisticsMetadata getStatisticsCollectionMetadataForWrite(ConnectorSession session, ConnectorTableMetadata tableMetadata, boolean tableReplace)
     {
-        return forProperties(tableMetadata.getProperties()).getStatisticsCollectionMetadataForWrite(session, unwrapTableMetadata(tableMetadata));
+        return forProperties(tableMetadata.getProperties()).getStatisticsCollectionMetadataForWrite(session, unwrapTableMetadata(tableMetadata), tableReplace);
     }
 
     @Override
@@ -543,15 +577,23 @@ public class LakehouseMetadata
     }
 
     @Override
-    public ConnectorInsertTableHandle beginRefreshMaterializedView(ConnectorSession session, ConnectorTableHandle tableHandle, List<ConnectorTableHandle> sourceTableHandles, RetryMode retryMode, RefreshType refreshType)
+    public ConnectorInsertTableHandle beginRefreshMaterializedView(ConnectorSession session, ConnectorTableHandle tableHandle, List<ConnectorTableHandle> sourceTableHandles, boolean hasForeignSourceTables, RetryMode retryMode, RefreshType refreshType)
     {
-        return icebergMetadata.beginRefreshMaterializedView(session, tableHandle, sourceTableHandles, retryMode, refreshType);
+        List<ConnectorTableHandle> icebergSourceHandles = sourceTableHandles.stream()
+                .filter(IcebergTableHandle.class::isInstance)
+                .toList();
+        hasForeignSourceTables |= icebergSourceHandles.size() < sourceTableHandles.size();
+        return icebergMetadata.beginRefreshMaterializedView(session, tableHandle, icebergSourceHandles, hasForeignSourceTables, retryMode, refreshType);
     }
 
     @Override
-    public Optional<ConnectorOutputMetadata> finishRefreshMaterializedView(ConnectorSession session, ConnectorTableHandle tableHandle, ConnectorInsertTableHandle insertHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics, List<ConnectorTableHandle> sourceTableHandles, List<String> sourceTableFunctions)
+    public Optional<ConnectorOutputMetadata> finishRefreshMaterializedView(ConnectorSession session, ConnectorTableHandle tableHandle, ConnectorInsertTableHandle insertHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics, List<ConnectorTableHandle> sourceTableHandles, boolean hasForeignSourceTables, boolean hasSourceTableFunctions)
     {
-        return icebergMetadata.finishRefreshMaterializedView(session, tableHandle, insertHandle, fragments, computedStatistics, sourceTableHandles, sourceTableFunctions);
+        List<ConnectorTableHandle> icebergSourceHandles = sourceTableHandles.stream()
+                .filter(IcebergTableHandle.class::isInstance)
+                .toList();
+        hasForeignSourceTables |= icebergSourceHandles.size() < sourceTableHandles.size();
+        return icebergMetadata.finishRefreshMaterializedView(session, tableHandle, insertHandle, fragments, computedStatistics, icebergSourceHandles, hasForeignSourceTables, hasSourceTableFunctions);
     }
 
     @Override
@@ -600,6 +642,12 @@ public class LakehouseMetadata
     public void setViewAuthorization(ConnectorSession session, SchemaTableName viewName, TrinoPrincipal principal)
     {
         hiveMetadata.setViewAuthorization(session, viewName, principal);
+    }
+
+    @Override
+    public void refreshView(ConnectorSession session, SchemaTableName viewName, ConnectorViewDefinition viewDefinition)
+    {
+        hiveMetadata.refreshView(session, viewName, viewDefinition);
     }
 
     @Override
@@ -891,9 +939,9 @@ public class LakehouseMetadata
     }
 
     @Override
-    public MaterializedViewFreshness getMaterializedViewFreshness(ConnectorSession session, SchemaTableName name)
+    public MaterializedViewFreshness getMaterializedViewFreshness(ConnectorSession session, SchemaTableName name, boolean considerGracePeriod)
     {
-        return icebergMetadata.getMaterializedViewFreshness(session, name);
+        return icebergMetadata.getMaterializedViewFreshness(session, name, considerGracePeriod);
     }
 
     @Override

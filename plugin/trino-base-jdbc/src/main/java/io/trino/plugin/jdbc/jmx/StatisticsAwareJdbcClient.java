@@ -65,6 +65,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
 
@@ -221,6 +222,12 @@ public final class StatisticsAwareJdbcClient
     }
 
     @Override
+    public void execute(ConnectorSession session, String query)
+    {
+        stats.getExecute().wrap(() -> delegate().execute(session, query));
+    }
+
+    @Override
     public void abortReadConnection(Connection connection, ResultSet resultSet)
             throws SQLException
     {
@@ -346,9 +353,9 @@ public final class StatisticsAwareJdbcClient
     }
 
     @Override
-    public JdbcOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)
+    public JdbcOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, Consumer<Runnable> rollbackActionConsumer)
     {
-        return stats.getBeginCreateTable().wrap(() -> delegate().beginCreateTable(session, tableMetadata));
+        return stats.getBeginCreateTable().wrap(() -> delegate().beginCreateTable(session, tableMetadata, rollbackActionConsumer));
     }
 
     @Override
@@ -374,10 +381,10 @@ public final class StatisticsAwareJdbcClient
             ConnectorSession session,
             JdbcTableHandle handle,
             Map<Integer, Collection<ColumnHandle>> updateColumnHandles,
-            List<Runnable> rollbackActions,
+            Consumer<Runnable> rollbackActionConsumer,
             RetryMode retryMode)
     {
-        return stats.getBeginMergeTable().wrap(() -> delegate().beginMerge(session, handle, updateColumnHandles, rollbackActions, retryMode));
+        return stats.getBeginMergeTable().wrap(() -> delegate().beginMerge(session, handle, updateColumnHandles, rollbackActionConsumer, retryMode));
     }
 
     @Override
@@ -414,7 +421,7 @@ public final class StatisticsAwareJdbcClient
     public Connection getConnection(ConnectorSession session)
             throws SQLException
     {
-        return stats.getGetConnectionWithHandle().wrap(() -> delegate().getConnection(session));
+        return stats.getGetConnection().wrap(() -> delegate().getConnection(session));
     }
 
     @Override

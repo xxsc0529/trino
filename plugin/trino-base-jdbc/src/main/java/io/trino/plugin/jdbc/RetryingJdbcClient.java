@@ -49,6 +49,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import static io.trino.plugin.jdbc.RetryingModule.retry;
 import static java.util.Objects.requireNonNull;
@@ -200,6 +201,13 @@ public class RetryingJdbcClient
     {
         // retry already implemented by RetryingConnectionFactory
         return delegate.getConnection(session, split, procedureHandle);
+    }
+
+    @Override
+    public void execute(ConnectorSession session, String query)
+    {
+        // we do a nested retry as opening a connection is already retried, however it is better to retry on intermittent issue than fail
+        retry(policy, () -> delegate.execute(session, query));
     }
 
     @Override
@@ -360,10 +368,10 @@ public class RetryingJdbcClient
     }
 
     @Override
-    public JdbcOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)
+    public JdbcOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, Consumer<Runnable> rollbackActionConsumer)
     {
         // no retrying as it could be not idempotent operation
-        return delegate.beginCreateTable(session, tableMetadata);
+        return delegate.beginCreateTable(session, tableMetadata, rollbackActionConsumer);
     }
 
     @Override
@@ -392,11 +400,11 @@ public class RetryingJdbcClient
             ConnectorSession session,
             JdbcTableHandle handle,
             Map<Integer, Collection<ColumnHandle>> updateColumnHandles,
-            List<Runnable> rollbackActions,
+            Consumer<Runnable> rollbackActionConsumer,
             RetryMode retryMode)
     {
         // no retrying as it could be not idempotent operation
-        return delegate.beginMerge(session, handle, updateColumnHandles, rollbackActions, retryMode);
+        return delegate.beginMerge(session, handle, updateColumnHandles, rollbackActionConsumer, retryMode);
     }
 
     @Override

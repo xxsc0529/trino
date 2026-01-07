@@ -23,8 +23,9 @@ import com.google.inject.Inject;
 import io.airlift.units.Duration;
 import io.trino.cache.CacheStatsMBean;
 import io.trino.cache.EvictableCacheBuilder;
+import io.trino.plugin.base.cache.identity.IdentityCacheMapping;
+import io.trino.plugin.base.cache.identity.IdentityCacheMapping.IdentityCacheKey;
 import io.trino.plugin.base.session.SessionPropertiesProvider;
-import io.trino.plugin.jdbc.IdentityCacheMapping.IdentityCacheKey;
 import io.trino.plugin.jdbc.JdbcProcedureHandle.ProcedureQuery;
 import io.trino.plugin.jdbc.expression.ParameterizedExpression;
 import io.trino.spi.TrinoException;
@@ -65,6 +66,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
+import java.util.function.Consumer;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Throwables.throwIfInstanceOf;
@@ -274,6 +276,12 @@ public class CachingJdbcClient
     }
 
     @Override
+    public void execute(ConnectorSession session, String query)
+    {
+        delegate.execute(session, query);
+    }
+
+    @Override
     public void abortReadConnection(Connection connection, ResultSet resultSet)
             throws SQLException
     {
@@ -417,10 +425,10 @@ public class CachingJdbcClient
             ConnectorSession session,
             JdbcTableHandle handle,
             Map<Integer, Collection<ColumnHandle>> updateColumnHandles,
-            List<Runnable> rollbackActions,
+            Consumer<Runnable> rollbackActionConsumer,
             RetryMode retryMode)
     {
-        return delegate.beginMerge(session, handle, updateColumnHandles, rollbackActions, retryMode);
+        return delegate.beginMerge(session, handle, updateColumnHandles, rollbackActionConsumer, retryMode);
     }
 
     @Override
@@ -592,9 +600,9 @@ public class CachingJdbcClient
     }
 
     @Override
-    public JdbcOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)
+    public JdbcOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, Consumer<Runnable> rollbackActionConsumer)
     {
-        return delegate.beginCreateTable(session, tableMetadata);
+        return delegate.beginCreateTable(session, tableMetadata, rollbackActionConsumer);
     }
 
     @Override

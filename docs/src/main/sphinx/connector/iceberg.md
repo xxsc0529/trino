@@ -217,6 +217,15 @@ implementation is used:
   -  Enable [sorted writing](iceberg-sorted-files) to tables with a specified sort order. Equivalent
      session property is `sorted_writing_enabled`.
   -  `true` 
+* - `iceberg.sorted-writing.local-staging-path`
+  -  A local directory that Trino can use for staging writes to sorted tables.
+     The `${USER}` placeholder can be used to use a different
+     location for each user. When this property is not configured, the target 
+     storage will be used for staging while writing to sorted tables which can
+     be inefficient when writing to object stores like S3. When 
+     `fs.hadoop.enabled` is not enabled, using this feature requires setup of 
+     [local file system](/object-storage/file-system-local)
+  -  
 * - `iceberg.allowed-extra-properties`
   -  List of extra properties that are allowed to be set on Iceberg tables.
      Use `*` to allow all properties.
@@ -228,6 +237,9 @@ implementation is used:
   - Number of threads used for retrieving metadata. Currently, only table loading 
     is parallelized.
   - `8`
+* - `iceberg.file-delete-threads`
+  - Number of threads to use for deleting files when running `expire_snapshots` procedure.
+  - Double the number of processors on the coordinator node.
 * - `iceberg.bucket-execution`
   - Enable bucket-aware execution. This allows the engine to use physical
     bucketing information to optimize queries by reducing data exchanges.
@@ -744,7 +756,7 @@ WHERE system.bucket(custkey, 16) = 2;
 ### Data management
 
 The {ref}`sql-data-management` functionality includes support for `INSERT`,
-`UPDATE`, `DELETE`, and `MERGE` statements.
+`UPDATE`, `DELETE`, `TRUNCATE`, and `MERGE` statements.
 
 (iceberg-delete)=
 #### Deletion by partition
@@ -890,6 +902,14 @@ procedure fails with a similar message: `Retention specified (1.00d) is shorter
 than the minimum retention configured in the system (7.00d)`. The default value
 for this property is `7d`.
 
+The command accepts an optional `retain_last` parameter to specify the minimum
+number of ancestor snapshots to preserve (defaults to 1), regardless of the
+`retention_threshold` value.
+
+The command accepts an optional `clean_expired_metadata` parameter (defaults to false).
+When true, cleans up metadata such as partition specs and schemas that are no
+longer referenced by snapshots.
+
 (iceberg-remove-orphan-files)=
 ##### remove_orphan_files
 
@@ -904,11 +924,38 @@ time is recommended to keep size of a table's data directory under control.
 ALTER TABLE test_table EXECUTE remove_orphan_files(retention_threshold => '7d');
 ```
 
+```text
+        metric_name         | metric_value
+----------------------------+--------------
+ processed_manifests_count  |            2
+ active_files_count         |           98
+ scanned_files_count        |           97
+ deleted_files_count        |            0
+```
+
 The value for `retention_threshold` must be higher than or equal to
 `iceberg.remove-orphan-files.min-retention` in the catalog otherwise the
 procedure fails with a similar message: `Retention specified (1.00d) is shorter
 than the minimum retention configured in the system (7.00d)`. The default value
 for this property is `7d`.
+
+The output of the query has the following metrics:
+
+:::{list-table} Output
+:widths: 40, 60
+:header-rows: 1
+
+* - Property name
+  - Description
+* - `processed_manifests_count`
+  - The count of manifest files read by remove_orphan_files.
+* - `active_files_count`
+  - The count of files belonging to snapshots that have not been expired.
+* - `scanned_files_count`
+  - The count of files scanned from the file system.
+* - `deleted_files_count`
+  - The count of files deleted by remove_orphan_files.
+:::
 
 (drop-extended-stats)=
 ##### drop_extended_stats
@@ -935,6 +982,8 @@ The following table properties can be updated after a table is created:
 - `partitioning`
 - `sorted_by`
 - `max_commit_retry`
+- `delete_after_commit_enabled`
+- `max_previous_versions`
 - `object_store_layout_enabled`
 - `data_location`
 
@@ -970,8 +1019,13 @@ connector using a {doc}`WITH </sql/create-table-as>` clause.
   - Description
 * - `format`
   - Optionally specifies the format of table data files; either `PARQUET`,
-    `ORC`, or `AVRO`. Defaults to the value of the `iceberg.file-format` catalog
-    configuration property, which defaults to `PARQUET`.
+    `ORC`, or `AVRO`. Defaults to the value of the `iceberg.file-format` 
+    catalog configuration property, which defaults to `PARQUET`.
+* - `compression_codec`
+  - Optionally specifies the compression-codec used for writing the table; 
+    either `NONE`, `ZSTD`, `SNAPPY`, `LZ4`, or `GZIP`. Defaults to the value 
+    of the `iceberg.compression-codec` catalog configuration property, which 
+    defaults to `ZSTD`.
 * - `partitioning`
   - Optionally specifies table partitioning. If a table is partitioned by
     columns `c1` and `c2`, the partitioning property is `partitioning =
@@ -992,6 +1046,14 @@ connector using a {doc}`WITH </sql/create-table-as>` clause.
   - Number of times to retry a commit before failing. Defaults to the value of 
     the `iceberg.max-commit-retry` catalog configuration property, which 
     defaults to `4`.
+* - `delete_after_commit_enabled`
+  - Whether to delete the oldest tracked version metadata files after each table
+    commit. Defaults to the value of the `iceberg.delete-after-commit-enabled` 
+    catalog configuration property, which defaults to `false`.
+* - `max_previous_versions`
+  - The max number of previous version metadata files to track.
+    Defaults to the value of the `iceberg.max-previous-versions` 
+    catalog configuration property, which defaults to `100`.
 * - `orc_bloom_filter_columns`
   - Comma-separated list of columns to use for ORC bloom filter. It improves the
     performance of queries using Equality and IN predicates when reading ORC
@@ -1029,9 +1091,9 @@ WITH (
     location = '/var/example_tables/test_table');
 ```
 
-The table definition below specifies to use ORC files, bloom filter index by columns
-`c1` and `c2`, fpp is 0.05, and a file system location of
-`/var/example_tables/test_table`:
+The table definition below specifies to use ORC files with compression_codec
+SNAPPY, bloom filter index by columns `c1` and `c2`, fpp is 0.05, and a file
+system location of `/var/example_tables/test_table`:
 
 ```sql
 CREATE TABLE test_table (
@@ -1040,6 +1102,7 @@ CREATE TABLE test_table (
     c3 DOUBLE)
 WITH (
     format = 'ORC',
+    compression_codec = 'SNAPPY',
     location = '/var/example_tables/test_table',
     orc_bloom_filter_columns = ARRAY['c1', 'c2'],
     orc_bloom_filter_fpp = 0.05);
@@ -1943,6 +2006,10 @@ behavior around grace periods](mv-grace-period). If all tables are Iceberg
 tables, the connector can determine if the data has not changed and continue to
 use the data from the storage tables, even after the grace period expired.
 
+The Iceberg connector supports the {ref}`WHEN STALE <mv-when-stale>` clause in
+{doc}`/sql/create-materialized-view` to control the behavior when a materialized
+view is stale. 
+
 Dropping a materialized view with {doc}`/sql/drop-materialized-view` removes
 the definition and the storage table.
 
@@ -2069,6 +2136,18 @@ ORDER BY _change_ordinal ASC;
 (6 rows)
 ```
 
+##### Limitations
+
+* Tables with delete files are not supported. The `table_changes` table function does 
+  not support snapshots that include delete files. Such delete files are typically 
+  produced by row-level operations.
+
+* The `table_changes` function reports changes on a per-snapshot basis within the
+  specified range. It does not compute the net effect across multiple snapshots.
+  For example, if a row is deleted in one snapshot and reinserted in a later snapshot
+  within the range, the function returns two records (one delete and one insert), rather
+  than omitting the row as having no net change.
+
 ## Performance
 
 The connector includes a number of performance improvements, detailed in the
@@ -2136,7 +2215,8 @@ enabled, metadata caching in coordinator memory is deactivated.
 
 Additionally, you can use the following catalog configuration properties:
 
-:::{list-table} Memory metadata caching configuration properties :widths: 25, 75
+:::{list-table} Memory metadata caching configuration properties
+:widths: 25, 75
 :header-rows: 1
 
 * - Property
@@ -2151,4 +2231,4 @@ Additionally, you can use the following catalog configuration properties:
     Defaults to `200MB`.
 * - `fs.memory-cache.max-content-length`
   - The maximum file size that can be cached. Defaults to `15MB`.
-  :::
+ :::

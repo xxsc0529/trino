@@ -57,7 +57,7 @@ import static io.trino.spi.type.IntegerType.INTEGER;
 import static io.trino.spi.type.RealType.REAL;
 import static io.trino.spi.type.SmallintType.SMALLINT;
 import static io.trino.spi.type.TinyintType.TINYINT;
-import static io.trino.spi.type.TypeSignatureParameter.typeVariable;
+import static io.trino.spi.type.TypeParameter.typeVariable;
 import static io.trino.spi.type.VarcharType.UNBOUNDED_LENGTH;
 import static io.trino.type.JsonType.JSON;
 import static io.trino.util.Failures.checkCondition;
@@ -573,7 +573,7 @@ public final class DecimalCasts
         try (JsonParser parser = createJsonParser(JSON_FACTORY, json)) {
             parser.nextToken();
             Int128 result = currentTokenAsLongDecimal(parser, intPrecision(precision), DecimalConversions.intScale(scale));
-            checkCondition(parser.nextToken() == null, INVALID_CAST_ARGUMENT, () -> String.format("Cannot cast input json to DECIMAL(%s,%s)", precision, scale)); // check no trailing token
+            checkCondition(parser.nextToken() == null, INVALID_CAST_ARGUMENT, "Cannot cast input json to DECIMAL(%s,%s)", precision, scale); // check no trailing token
             return result;
         }
         catch (IOException | NumberFormatException | JsonCastException e) {
@@ -587,7 +587,7 @@ public final class DecimalCasts
         try (JsonParser parser = createJsonParser(JSON_FACTORY, json)) {
             parser.nextToken();
             Long result = currentTokenAsShortDecimal(parser, intPrecision(precision), DecimalConversions.intScale(scale));
-            checkCondition(parser.nextToken() == null, INVALID_CAST_ARGUMENT, () -> String.format("Cannot cast input json to DECIMAL(%s,%s)", precision, scale)); // check no trailing token
+            checkCondition(parser.nextToken() == null, INVALID_CAST_ARGUMENT, "Cannot cast input json to DECIMAL(%s,%s)", precision, scale); // check no trailing token
             return result;
         }
         catch (IOException | NumberFormatException | JsonCastException e) {

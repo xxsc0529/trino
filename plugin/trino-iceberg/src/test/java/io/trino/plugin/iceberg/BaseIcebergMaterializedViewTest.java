@@ -21,7 +21,6 @@ import io.trino.connector.MockConnectorFactory;
 import io.trino.connector.MockConnectorPlugin;
 import io.trino.filesystem.Location;
 import io.trino.filesystem.TrinoFileSystem;
-import io.trino.plugin.iceberg.fileio.ForwardingFileIo;
 import io.trino.spi.Page;
 import io.trino.spi.QueryId;
 import io.trino.spi.SplitWeight;
@@ -62,6 +61,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static io.airlift.slice.SizeOf.instanceSize;
+import static io.trino.plugin.iceberg.IcebergTestUtils.FILE_IO_FACTORY;
 import static io.trino.plugin.iceberg.IcebergTestUtils.getFileSystemFactory;
 import static io.trino.spi.function.table.ReturnTypeSpecification.GenericTable.GENERIC_TABLE;
 import static io.trino.spi.function.table.TableFunctionProcessorState.Finished.FINISHED;
@@ -211,11 +211,11 @@ public abstract class BaseIcebergMaterializedViewTest
         assertThat((String) computeScalar("SHOW CREATE MATERIALIZED VIEW test_mv_show_create"))
                 .matches(
                         "\\QCREATE MATERIALIZED VIEW iceberg." + schema + ".test_mv_show_create\n" +
+                                "WHEN STALE INLINE\n" +
                                 "WITH (\n" +
                                 "   format = 'ORC',\n" +
                                 "   format_version = 2,\n" +
                                 "   location = '" + getSchemaDirectory() + "/test_mv_show_create-\\E[0-9a-f]+\\Q',\n" +
-                                "   max_commit_retry = 4,\n" +
                                 "   orc_bloom_filter_columns = ARRAY['_date'],\n" +
                                 "   orc_bloom_filter_fpp = 1E-1,\n" +
                                 "   partitioning = ARRAY['_date'],\n" +
@@ -528,11 +528,11 @@ public abstract class BaseIcebergMaterializedViewTest
 
         assertThat((String) computeScalar("SHOW CREATE MATERIALIZED VIEW materialized_view_window"))
                 .matches("\\QCREATE MATERIALIZED VIEW " + qualifiedMaterializedViewName + "\n" +
+                        "WHEN STALE INLINE\n" +
                         "WITH (\n" +
                         "   format = 'PARQUET',\n" +
                         "   format_version = 2,\n" +
                         "   location = '" + getSchemaDirectory() + "/materialized_view_window-\\E[0-9a-f]+\\Q',\n" +
-                        "   max_commit_retry = 4,\n" +
                         "   partitioning = ARRAY['_date'],\n" +
                         "   storage_schema = '" + schema + "'\n" +
                         ") AS\n" +
@@ -766,7 +766,7 @@ public abstract class BaseIcebergMaterializedViewTest
                     .executeWithPlan(getSession(), format("REFRESH MATERIALIZED VIEW %s", materializedViewName))
                     .queryId();
             String savedQueryId = getStorageTableMetadata(materializedViewName).currentSnapshot().summary().get("trino_query_id");
-            assertThat(savedQueryId).isEqualTo(refreshQueryId.getId());
+            assertThat(savedQueryId).isEqualTo(refreshQueryId.id());
         }
         finally {
             assertUpdate("DROP TABLE " + sourceTableName);
@@ -1118,7 +1118,7 @@ public abstract class BaseIcebergMaterializedViewTest
         QueryRunner queryRunner = getQueryRunner();
         TrinoFileSystem fileSystemFactory = getFileSystemFactory(queryRunner).create(ConnectorIdentity.ofUser("test"));
         Location metadataLocation = Location.of(getStorageMetadataLocation(materializedViewName));
-        return TableMetadataParser.read(new ForwardingFileIo(fileSystemFactory), metadataLocation.toString());
+        return TableMetadataParser.read(FILE_IO_FACTORY.create(fileSystemFactory), metadataLocation.toString());
     }
 
     private long getLatestSnapshotId(String tableName)
@@ -1149,7 +1149,7 @@ public abstract class BaseIcebergMaterializedViewTest
         }
     }
 
-    public static class SequenceTableFunctionHandle
+    public record SequenceTableFunctionHandle()
             implements ConnectorTableFunctionHandle {}
 
     public static class SequenceTableFunctionProcessorProvider

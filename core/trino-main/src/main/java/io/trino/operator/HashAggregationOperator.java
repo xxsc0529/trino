@@ -33,6 +33,7 @@ import io.trino.sql.planner.plan.PlanNodeId;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.OptionalLong;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -58,7 +59,7 @@ public class HashAggregationOperator
         private final Step step;
         private final boolean produceDefaultOutput;
         private final List<AggregatorFactory> aggregatorFactories;
-        private final Optional<Integer> groupIdChannel;
+        private final OptionalInt groupIdChannel;
 
         private final int expectedGroups;
         private final Optional<DataSize> maxPartialMemory;
@@ -80,7 +81,7 @@ public class HashAggregationOperator
                 List<Integer> globalAggregationGroupIds,
                 Step step,
                 List<AggregatorFactory> aggregatorFactories,
-                Optional<Integer> groupIdChannel,
+                OptionalInt groupIdChannel,
                 int expectedGroups,
                 Optional<DataSize> maxPartialMemory,
                 FlatHashStrategyCompiler hashStrategyCompiler,
@@ -116,7 +117,7 @@ public class HashAggregationOperator
                 Step step,
                 boolean produceDefaultOutput,
                 List<AggregatorFactory> aggregatorFactories,
-                Optional<Integer> groupIdChannel,
+                OptionalInt groupIdChannel,
                 int expectedGroups,
                 Optional<DataSize> maxPartialMemory,
                 boolean spillEnabled,
@@ -154,7 +155,7 @@ public class HashAggregationOperator
                 Step step,
                 boolean produceDefaultOutput,
                 List<AggregatorFactory> aggregatorFactories,
-                Optional<Integer> groupIdChannel,
+                OptionalInt groupIdChannel,
                 int expectedGroups,
                 Optional<DataSize> maxPartialMemory,
                 boolean spillEnabled,
@@ -246,7 +247,7 @@ public class HashAggregationOperator
     private final Step step;
     private final boolean produceDefaultOutput;
     private final List<AggregatorFactory> aggregatorFactories;
-    private final Optional<Integer> groupIdChannel;
+    private final OptionalInt groupIdChannel;
     private final int expectedGroups;
     private final Optional<DataSize> maxPartialMemory;
     private final boolean spillEnabled;
@@ -255,8 +256,6 @@ public class HashAggregationOperator
     private final SpillerFactory spillerFactory;
     private final FlatHashStrategyCompiler flatHashStrategyCompiler;
     private final AggregationMetrics aggregationMetrics = new AggregationMetrics();
-
-    private final List<Type> types;
 
     private HashAggregationBuilder aggregationBuilder;
     private final LocalMemoryContext memoryContext;
@@ -279,7 +278,7 @@ public class HashAggregationOperator
             Step step,
             boolean produceDefaultOutput,
             List<AggregatorFactory> aggregatorFactories,
-            Optional<Integer> groupIdChannel,
+            OptionalInt groupIdChannel,
             int expectedGroups,
             Optional<DataSize> maxPartialMemory,
             boolean spillEnabled,
@@ -305,7 +304,6 @@ public class HashAggregationOperator
         this.produceDefaultOutput = produceDefaultOutput;
         this.expectedGroups = expectedGroups;
         this.maxPartialMemory = requireNonNull(maxPartialMemory, "maxPartialMemory is null");
-        this.types = toTypes(groupByTypes, aggregatorFactories);
         this.spillEnabled = spillEnabled;
         this.memoryLimitForMerge = requireNonNull(memoryLimitForMerge, "memoryLimitForMerge is null");
         this.memoryLimitForMergeWithMemory = requireNonNull(memoryLimitForMergeWithMemory, "memoryLimitForMergeWithMemory is null");
@@ -540,7 +538,7 @@ public class HashAggregationOperator
     {
         // global aggregation output page will only be constructed once,
         // so a new PageBuilder is constructed (instead of using PageBuilder.reset)
-        PageBuilder output = new PageBuilder(globalAggregationGroupIds.size(), types);
+        PageBuilder output = new PageBuilder(globalAggregationGroupIds.size(), toTypes(groupByTypes, aggregatorFactories));
 
         for (int groupId : globalAggregationGroupIds) {
             output.declarePosition();

@@ -13,6 +13,7 @@
  */
 package io.trino.execution.scheduler.faulttolerant;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Stopwatch;
 import com.google.common.base.Ticker;
 import com.google.common.collect.HashMultimap;
@@ -46,7 +47,6 @@ import io.trino.spi.TrinoException;
 import io.trino.spi.memory.MemoryPoolInfo;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
-import org.assertj.core.util.VisibleForTesting;
 import org.weakref.jmx.Managed;
 import org.weakref.jmx.Nested;
 
@@ -114,7 +114,7 @@ public class BinPackingNodeAllocatorService
     private final DataSize eagerSpeculativeTasksNodeMemoryOvercommit;
     private final Ticker ticker;
 
-    private final ConcurrentNavigableMap<QueryId, Deque<PendingAcquire>> pendingAcquires = new ConcurrentSkipListMap<>(Ordering.natural().onResultOf(QueryId::getId));
+    private final ConcurrentNavigableMap<QueryId, Deque<PendingAcquire>> pendingAcquires = new ConcurrentSkipListMap<>(Ordering.natural().onResultOf(QueryId::id));
     private final Set<BinPackingNodeLease> fulfilledAcquires = newConcurrentHashSet();
     private final Duration allowedNoMatchingNodePeriod;
     private final Duration exhaustedNodeWaitPeriod;

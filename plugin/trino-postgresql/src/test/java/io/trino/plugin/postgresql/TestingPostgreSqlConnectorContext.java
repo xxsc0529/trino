@@ -22,6 +22,7 @@ import io.trino.metadata.TypeRegistry;
 import io.trino.node.TestingInternalNodeManager;
 import io.trino.operator.FlatHashStrategyCompiler;
 import io.trino.operator.GroupByHashPageIndexerFactory;
+import io.trino.operator.NullSafeHashCompiler;
 import io.trino.operator.PagesIndex;
 import io.trino.operator.PagesIndexPageSorter;
 import io.trino.plugin.geospatial.GeometryType;
@@ -29,7 +30,6 @@ import io.trino.spi.NodeManager;
 import io.trino.spi.PageIndexerFactory;
 import io.trino.spi.PageSorter;
 import io.trino.spi.VersionEmbedder;
-import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.ConnectorContext;
 import io.trino.spi.connector.MetadataProvider;
 import io.trino.spi.type.TypeManager;
@@ -39,7 +39,6 @@ import io.trino.util.EmbedVersion;
 
 import static io.trino.node.TestingInternalNodeManager.CURRENT_NODE;
 import static io.trino.spi.connector.MetadataProvider.NOOP_METADATA_PROVIDER;
-import static io.trino.testing.TestingHandles.TEST_CATALOG_HANDLE;
 
 public class TestingPostgreSqlConnectorContext
         implements ConnectorContext
@@ -52,17 +51,11 @@ public class TestingPostgreSqlConnectorContext
 
     public TestingPostgreSqlConnectorContext()
     {
-        pageIndexerFactory = new GroupByHashPageIndexerFactory(new FlatHashStrategyCompiler(new TypeOperators()));
+        pageIndexerFactory = new GroupByHashPageIndexerFactory(new FlatHashStrategyCompiler(new TypeOperators(), new NullSafeHashCompiler(new TypeOperators())));
         nodeManager = new DefaultNodeManager(CURRENT_NODE, TestingInternalNodeManager.createDefault(), true);
         TypeRegistry typeRegistry = new TypeRegistry(new TypeOperators(), new FeaturesConfig());
         typeRegistry.addType(GeometryType.GEOMETRY);
         typeManager = new InternalTypeManager(typeRegistry);
-    }
-
-    @Override
-    public CatalogHandle getCatalogHandle()
-    {
-        return TEST_CATALOG_HANDLE;
     }
 
     @Override

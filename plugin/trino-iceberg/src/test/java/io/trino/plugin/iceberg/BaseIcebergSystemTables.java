@@ -138,11 +138,11 @@ public abstract class BaseIcebergSystemTables
     {
         assertQuery("SELECT count(*) FROM test_schema.test_table", "VALUES 6");
         assertQuery("SHOW COLUMNS FROM test_schema.\"test_table$partitions\"",
-                "VALUES ('partition', 'row(_date date)', '', '')," +
+                "VALUES ('partition', 'row(\"_date\" date)', '', '')," +
                         "('record_count', 'bigint', '', '')," +
                         "('file_count', 'bigint', '', '')," +
                         "('total_size', 'bigint', '', '')," +
-                        "('data', 'row(_bigint row(min bigint, max bigint, null_count bigint, nan_count bigint))', '', '')");
+                        "('data', 'row(\"_bigint\" row(\"min\" bigint, \"max\" bigint, \"null_count\" bigint, \"nan_count\" bigint))', '', '')");
 
         MaterializedResult result = computeActual("SELECT * from test_schema.\"test_table$partitions\"");
         assertThat(result.getRowCount()).isEqualTo(3);
@@ -262,10 +262,7 @@ public abstract class BaseIcebergSystemTables
         assertMetadataLogEntries(latestSchemaIds, latestSequenceNumbers);
 
         assertUpdate("INSERT INTO test_schema.test_metadata_log_entries VALUES (1)", 1);
-        // INSERT create two commits (https://github.com/trinodb/trino/issues/15439) and share a same snapshotId
         latestSchemaIds.add(0);
-        latestSchemaIds.add(0);
-        latestSequenceNumbers.add(2L);
         latestSequenceNumbers.add(2L);
         assertMetadataLogEntries(latestSchemaIds, latestSequenceNumbers);
 
@@ -279,11 +276,8 @@ public abstract class BaseIcebergSystemTables
         latestSequenceNumbers.add(3L);
         assertMetadataLogEntries(latestSchemaIds, latestSequenceNumbers);
 
-        // OPTIMIZE create two commits: update snapshot and rewrite statistics
         assertUpdate("ALTER TABLE test_schema.test_metadata_log_entries execute optimize");
         latestSchemaIds.add(1);
-        latestSchemaIds.add(1);
-        latestSequenceNumbers.add(4L);
         latestSequenceNumbers.add(4L);
         assertMetadataLogEntries(latestSchemaIds, latestSequenceNumbers);
 
@@ -293,8 +287,6 @@ public abstract class BaseIcebergSystemTables
         assertMetadataLogEntries(latestSchemaIds, latestSequenceNumbers);
 
         assertUpdate("INSERT INTO test_schema.test_metadata_log_entries VALUES (1)", 1);
-        latestSchemaIds.add(2);
-        latestSequenceNumbers.add(6L);
         latestSchemaIds.add(2);
         latestSequenceNumbers.add(6L);
         assertMetadataLogEntries(latestSchemaIds, latestSequenceNumbers);
@@ -346,7 +338,7 @@ public abstract class BaseIcebergSystemTables
                             "('added_delete_files_count', 'integer', '', '')," +
                             "('existing_delete_files_count', 'integer', '', '')," +
                             "('deleted_delete_files_count', 'integer', '', '')," +
-                            "('partition_summaries', 'array(row(contains_null boolean, contains_nan boolean, lower_bound varchar, upper_bound varchar))', '', '')," +
+                            "('partition_summaries', 'array(row(\"contains_null\" boolean, \"contains_nan\" boolean, \"lower_bound\" varchar, \"upper_bound\" varchar))', '', '')," +
                             "('reference_snapshot_id', 'bigint', '', '')");
 
             assertThat((String) computeScalar("SELECT path FROM \"" + table.getName() + "$all_manifests\"")).endsWith("-m0.avro");
@@ -391,7 +383,7 @@ public abstract class BaseIcebergSystemTables
                         "('existing_rows_count', 'bigint', '', '')," +
                         "('deleted_data_files_count', 'integer', '', '')," +
                         "('deleted_rows_count', 'bigint', '', '')," +
-                        "('partition_summaries', 'array(row(contains_null boolean, contains_nan boolean, lower_bound varchar, upper_bound varchar))', '', '')");
+                        "('partition_summaries', 'array(row(\"contains_null\" boolean, \"contains_nan\" boolean, \"lower_bound\" varchar, \"upper_bound\" varchar))', '', '')");
         assertQuerySucceeds("SELECT * FROM test_schema.\"test_table$manifests\"");
         assertThat(query("SELECT added_data_files_count, existing_rows_count, added_rows_count, deleted_data_files_count, deleted_rows_count, partition_summaries FROM test_schema.\"test_table$manifests\""))
                 .matches(
@@ -439,7 +431,7 @@ public abstract class BaseIcebergSystemTables
                         "('file_path', 'varchar', '', '')," +
                         "('file_format', 'varchar', '', '')," +
                         "('spec_id', 'integer', '', '')," +
-                        "('partition', 'row(_date date)', '', '')," +
+                        "('partition', 'row(\"_date\" date)', '', '')," +
                         "('record_count', 'bigint', '', '')," +
                         "('file_size_in_bytes', 'bigint', '', '')," +
                         "('column_sizes', 'map(integer, bigint)', '', '')," +
@@ -622,10 +614,10 @@ public abstract class BaseIcebergSystemTables
                             "('snapshot_id', 'bigint', '', '')," +
                             "('sequence_number', 'bigint', '', '')," +
                             "('file_sequence_number', 'bigint', '', '')," +
-                            "('data_file', 'row(content integer, file_path varchar, file_format varchar, spec_id integer, record_count bigint, file_size_in_bytes bigint, " +
-                            "column_sizes map(integer, bigint), value_counts map(integer, bigint), null_value_counts map(integer, bigint), nan_value_counts map(integer, bigint), " +
-                            "lower_bounds map(integer, varchar), upper_bounds map(integer, varchar), key_metadata varbinary, split_offsets array(bigint), " +
-                            "equality_ids array(integer), sort_order_id integer)', '', '')," +
+                            "('data_file', 'row(\"content\" integer, \"file_path\" varchar, \"file_format\" varchar, \"spec_id\" integer, \"record_count\" bigint, \"file_size_in_bytes\" bigint, " +
+                            "\"column_sizes\" map(integer, bigint), \"value_counts\" map(integer, bigint), \"null_value_counts\" map(integer, bigint), \"nan_value_counts\" map(integer, bigint), " +
+                            "\"lower_bounds\" map(integer, varchar), \"upper_bounds\" map(integer, varchar), \"key_metadata\" varbinary, \"split_offsets\" array(bigint), " +
+                            "\"equality_ids\" array(integer), \"sort_order_id\" integer)', '', '')," +
                             "('readable_metrics', 'json', '', '')");
 
             Table icebergTable = loadTable(table.getName());
@@ -698,7 +690,7 @@ public abstract class BaseIcebergSystemTables
             assertThat(deleteFile.getField(4)).isEqualTo(1L); // record_count
             assertThat((long) deleteFile.getField(5)).isPositive(); // file_size_in_bytes
 
-            //noinspection unchecked
+            @SuppressWarnings("unchecked")
             Map<Integer, Long> columnSizes = (Map<Integer, Long>) deleteFile.getField(6);
             switch (format) {
                 case ORC -> assertThat(columnSizes).isNull();
@@ -714,7 +706,7 @@ public abstract class BaseIcebergSystemTables
             assertThat(deleteFile.getField(9)).isEqualTo(value(Map.of(), null)); // nan_value_counts
 
             // lower_bounds
-            //noinspection unchecked
+            @SuppressWarnings("unchecked")
             Map<Integer, String> lowerBounds = (Map<Integer, String>) deleteFile.getField(10);
             assertThat(lowerBounds)
                     .hasSize(2)
@@ -722,7 +714,7 @@ public abstract class BaseIcebergSystemTables
                     .satisfies(_ -> assertThat(lowerBounds.get(DELETE_FILE_PATH.fieldId())).contains(table.getName()));
 
             // upper_bounds
-            //noinspection unchecked
+            @SuppressWarnings("unchecked")
             Map<Integer, String> upperBounds = (Map<Integer, String>) deleteFile.getField(11);
             assertThat(upperBounds)
                     .hasSize(2)
@@ -772,7 +764,7 @@ public abstract class BaseIcebergSystemTables
             assertThat(dataFile.getField(3)).isEqualTo(0); // spec_id
             assertThat(dataFile.getField(4)).isEqualTo(1L); // record_count
             assertThat((long) dataFile.getField(5)).isPositive(); // file_size_in_bytes
-            assertThat(dataFile.getField(6)).isEqualTo(Map.of(1, 45L)); // column_sizes
+            assertThat(dataFile.getField(6)).isEqualTo(Map.of(1, 51L)); // column_sizes
             assertThat(dataFile.getField(7)).isEqualTo(Map.of(1, 1L)); // value_counts
             assertThat(dataFile.getField(8)).isEqualTo(Map.of(1, 0L)); // null_value_counts
             assertThat(dataFile.getField(9)).isEqualTo(Map.of()); // nan_value_counts
@@ -787,7 +779,7 @@ public abstract class BaseIcebergSystemTables
                     .isEqualTo("""
                             {\
                             "dt":{"column_size":null,"value_count":null,"null_value_count":null,"nan_value_count":null,"lower_bound":null,"upper_bound":null},\
-                            "id":{"column_size":45,"value_count":1,"null_value_count":0,"nan_value_count":null,"lower_bound":1,"upper_bound":1}\
+                            "id":{"column_size":51,"value_count":1,"null_value_count":0,"nan_value_count":null,"lower_bound":1,"upper_bound":1}\
                             }""");
         }
     }
@@ -832,10 +824,10 @@ public abstract class BaseIcebergSystemTables
                             "('snapshot_id', 'bigint', '', '')," +
                             "('sequence_number', 'bigint', '', '')," +
                             "('file_sequence_number', 'bigint', '', '')," +
-                            "('data_file', 'row(content integer, file_path varchar, file_format varchar, spec_id integer, partition row(dt date), record_count bigint, file_size_in_bytes bigint, " +
-                            "column_sizes map(integer, bigint), value_counts map(integer, bigint), null_value_counts map(integer, bigint), nan_value_counts map(integer, bigint), " +
-                            "lower_bounds map(integer, varchar), upper_bounds map(integer, varchar), key_metadata varbinary, split_offsets array(bigint), " +
-                            "equality_ids array(integer), sort_order_id integer)', '', '')," +
+                            "('data_file', 'row(\"content\" integer, \"file_path\" varchar, \"file_format\" varchar, \"spec_id\" integer, \"partition\" row(\"dt\" date), \"record_count\" bigint, \"file_size_in_bytes\" bigint, " +
+                            "\"column_sizes\" map(integer, bigint), \"value_counts\" map(integer, bigint), \"null_value_counts\" map(integer, bigint), \"nan_value_counts\" map(integer, bigint), " +
+                            "\"lower_bounds\" map(integer, varchar), \"upper_bounds\" map(integer, varchar), \"key_metadata\" varbinary, \"split_offsets\" array(bigint), " +
+                            "\"equality_ids\" array(integer), \"sort_order_id\" integer)', '', '')," +
                             "('readable_metrics', 'json', '', '')");
 
             assertThat(query("SELECT data_file.partition FROM \"" + table.getName() + "$entries\""))
@@ -849,13 +841,6 @@ public abstract class BaseIcebergSystemTables
         try (TestTable table = newTrinoTable("test_properties", "(x BIGINT,y DOUBLE) WITH (sorted_by = ARRAY['y'])")) {
             Table icebergTable = loadTable(table.getName());
             Map<String, String> actualProperties = getTableProperties(table.getName());
-            if (format == PARQUET) {
-                assertThat(actualProperties).hasSize(9);
-            }
-            else {
-                assertThat(actualProperties).hasSize(10);
-                assertThat(actualProperties).contains(entry("write.%s.compression-codec".formatted(format.name().toLowerCase(ENGLISH)), "zstd"));
-            }
             assertThat(actualProperties).contains(
                     entry("format", "iceberg/" + format.name()),
                     entry("provider", "iceberg"),
@@ -863,9 +848,7 @@ public abstract class BaseIcebergSystemTables
                     entry("location", icebergTable.location()),
                     entry("format-version", "2"),
                     entry("sort-order", "y ASC NULLS FIRST"),
-                    entry("write.format.default", format.name()),
-                    entry("write.parquet.compression-codec", "zstd"),
-                    entry("commit.retry.num-retries", "4"));
+                    entry("write.format.default", format.name()));
         }
     }
 

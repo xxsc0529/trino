@@ -23,7 +23,6 @@ import io.airlift.json.JsonCodec;
 import io.airlift.json.JsonCodecFactory;
 import io.trino.filesystem.Location;
 import io.trino.filesystem.TrinoFileSystem;
-import io.trino.filesystem.TrinoFileSystemFactory;
 import io.trino.filesystem.TrinoInputFile;
 import io.trino.parquet.ParquetDataSource;
 import io.trino.parquet.ParquetReaderOptions;
@@ -61,7 +60,9 @@ import io.trino.spi.connector.SourcePage;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.predicate.Utils;
-import io.trino.spi.type.StandardTypes;
+import io.trino.spi.type.ArrayType;
+import io.trino.spi.type.MapType;
+import io.trino.spi.type.RowType;
 import io.trino.spi.type.TypeManager;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Type;
@@ -122,7 +123,7 @@ public class DeltaLakePageSourceProvider
 
     private static final int MAX_ROW_ID_POSITIONS = 100_000;
 
-    private final TrinoFileSystemFactory fileSystemFactory;
+    private final DeltaLakeFileSystemFactory fileSystemFactory;
     private final FileFormatDataSourceStats fileFormatDataSourceStats;
     private final ParquetReaderOptions parquetReaderOptions;
     private final int domainCompactionThreshold;
@@ -131,7 +132,7 @@ public class DeltaLakePageSourceProvider
 
     @Inject
     public DeltaLakePageSourceProvider(
-            TrinoFileSystemFactory fileSystemFactory,
+            DeltaLakeFileSystemFactory fileSystemFactory,
             FileFormatDataSourceStats fileFormatDataSourceStats,
             ParquetReaderConfig parquetReaderConfig,
             DeltaLakeConfig deltaLakeConfig,
@@ -221,7 +222,7 @@ public class DeltaLakePageSourceProvider
         }
 
         Location location = Location.of(split.getPath());
-        TrinoFileSystem fileSystem = fileSystemFactory.create(session);
+        TrinoFileSystem fileSystem = fileSystemFactory.create(session, table);
         TrinoInputFile inputFile = fileSystem.newInputFile(location, split.getFileSize());
         ParquetReaderOptions options = ParquetReaderOptions.builder(parquetReaderOptions)
                 .withMaxReadBlockSize(getParquetMaxReadBlockSize(session))
@@ -263,6 +264,7 @@ public class DeltaLakePageSourceProvider
                 parquetDateTimeZone,
                 fileFormatDataSourceStats,
                 options,
+                Optional.empty(),
                 Optional.empty(),
                 domainCompactionThreshold,
                 OptionalLong.of(split.getFileSize()));
@@ -363,7 +365,7 @@ public class DeltaLakePageSourceProvider
     private Map<Integer, String> loadParquetIdAndNameMapping(TrinoInputFile inputFile, ParquetReaderOptions options)
     {
         try (ParquetDataSource dataSource = new TrinoParquetDataSource(inputFile, options, fileFormatDataSourceStats)) {
-            ParquetMetadata parquetMetadata = MetadataReader.readFooter(dataSource, options.getMaxFooterReadSize());
+            ParquetMetadata parquetMetadata = MetadataReader.readFooter(dataSource, options.getMaxFooterReadSize(), Optional.empty());
             FileMetadata fileMetaData = parquetMetadata.getFileMetaData();
             MessageType fileSchema = fileMetaData.getSchema();
 
@@ -384,9 +386,9 @@ public class DeltaLakePageSourceProvider
 
         ImmutableMap.Builder<HiveColumnHandle, Domain> predicate = ImmutableMap.builder();
         effectivePredicate.getDomains().get().forEach((columnHandle, domain) -> {
-            String baseType = columnHandle.baseType().getTypeSignature().getBase();
+            io.trino.spi.type.Type baseType = columnHandle.baseType();
             // skip looking up predicates for complex types as Parquet only stores stats for primitives
-            if (!baseType.equals(StandardTypes.MAP) && !baseType.equals(StandardTypes.ARRAY) && !baseType.equals(StandardTypes.ROW)) {
+            if (!(baseType instanceof MapType) && !(baseType instanceof ArrayType) && !(baseType instanceof RowType)) {
                 Optional<HiveColumnHandle> hiveColumnHandle = toHiveColumnHandle(columnHandle, columnMapping, fieldIdToName);
                 hiveColumnHandle.ifPresent(column -> predicate.put(column, domain));
             }

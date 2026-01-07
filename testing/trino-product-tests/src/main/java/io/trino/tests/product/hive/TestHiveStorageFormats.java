@@ -305,6 +305,8 @@ public class TestHiveStorageFormats
                 .filter(format -> !"REGEX".equals(format))
                 // ESRI is read-only
                 .filter(format -> !"ESRI".equals(format))
+                // SEQUENCEFILE_PROTOBUF is read-only
+                .filter(format -> !"SEQUENCEFILE_PROTOBUF".equals(format))
                 // TODO when using JSON serde Hive fails with ClassNotFoundException: org.apache.hive.hcatalog.data.JsonSerDe
                 .filter(format -> !"JSON".equals(format))
                 // OPENX is not supported in Hive by default
@@ -868,8 +870,8 @@ public class TestHiveStorageFormats
                     .containsOnly(row(
                             format("array(%s)", type),
                             format("map(%1$s, %1$s)", type),
-                            format("row(col %s)", type),
-                            format("array(map(%1$s, row(col array(%1$s))))", type))));
+                            format("row(\"col\" %s)", type),
+                            format("array(map(%1$s, row(\"col\" array(%1$s))))", type))));
 
             // Check the values as varchar
             softly.check(() -> assertThat(onTrino()

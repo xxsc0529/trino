@@ -83,6 +83,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Strings.isNullOrEmpty;
@@ -381,7 +382,7 @@ public class IgniteClient
     }
 
     @Override
-    public JdbcOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)
+    public JdbcOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, Consumer<Runnable> rollbackActionConsumer)
     {
         if (tableMetadata.getComment().isPresent()) {
             throw new TrinoException(NOT_SUPPORTED, "This connector does not support creating tables with table comment");
@@ -417,13 +418,14 @@ public class IgniteClient
 
         try (Connection connection = connectionFactory.openConnection(session)) {
             execute(session, connection, sql);
-
-            return new IgniteOutputTableHandle(
+            IgniteOutputTableHandle destinationTableHandle = new IgniteOutputTableHandle(
                     new RemoteTableName(Optional.empty(), Optional.of(schemaTableName.getSchemaName()), schemaTableName.getTableName()),
                     columnNames,
                     columnTypes.build(),
                     Optional.empty(),
                     primaryKeys.isEmpty() ? Optional.of(IGNITE_DUMMY_ID) : Optional.empty());
+            rollbackActionConsumer.accept(() -> rollbackCreateDestinationTable(session, destinationTableHandle.getRemoteTableName()));
+            return destinationTableHandle;
         }
         catch (SQLException e) {
             throw new TrinoException(JDBC_ERROR, e);
@@ -440,7 +442,7 @@ public class IgniteClient
             columnDefinitions.add(quoted(IGNITE_DUMMY_ID) + " VARCHAR NOT NULL");
             primaryKeys = ImmutableList.of(IGNITE_DUMMY_ID);
         }
-        columnDefinitions.add("PRIMARY KEY (" + join(", ", primaryKeys.stream().map(this::quoted).collect(joining(", "))) + ")");
+        columnDefinitions.add("PRIMARY KEY (" + primaryKeys.stream().map(this::quoted).collect(joining(", ")) + ")");
 
         String remoteTableName = quoted(null, schemaTableName.getSchemaName(), schemaTableName.getTableName());
         return format("CREATE TABLE %s (%s) ", remoteTableName, join(", ", columnDefinitions.build()));

@@ -16,8 +16,8 @@ package io.trino.metadata;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Ordering;
+import io.trino.connector.CatalogHandle;
 import io.trino.spi.TrinoException;
-import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.function.BoundSignature;
 import io.trino.spi.function.CatalogSchemaFunctionName;
 import io.trino.spi.function.FunctionMetadata;
@@ -76,7 +76,7 @@ class FunctionBinder
         }
 
         List<CatalogFunctionMetadata> exactCandidates = candidates.stream()
-                .filter(function -> function.functionMetadata().getSignature().getTypeVariableConstraints().isEmpty())
+                .filter(function -> !function.functionMetadata().getSignature().isGeneric())
                 .collect(toImmutableList());
 
         Optional<CatalogFunctionBinding> match = matchFunctionExact(exactCandidates, parameterTypes);
@@ -85,7 +85,7 @@ class FunctionBinder
         }
 
         List<CatalogFunctionMetadata> genericCandidates = candidates.stream()
-                .filter(function -> !function.functionMetadata().getSignature().getTypeVariableConstraints().isEmpty())
+                .filter(function -> function.functionMetadata().getSignature().isGeneric())
                 .collect(toImmutableList());
 
         match = matchFunctionExact(genericCandidates, parameterTypes);
@@ -110,7 +110,7 @@ class FunctionBinder
 
         // only consider generic genericCandidates
         List<CatalogFunctionMetadata> genericCandidates = candidates.stream()
-                .filter(function -> !function.functionMetadata().getSignature().getTypeVariableConstraints().isEmpty())
+                .filter(function -> function.functionMetadata().getSignature().isGeneric())
                 .collect(toImmutableList());
         for (CatalogFunctionMetadata candidate : genericCandidates) {
             if (canBindSignature(candidate.functionMetadata().getSignature(), signature)) {
@@ -129,7 +129,7 @@ class FunctionBinder
 
     private static boolean possibleExactCastMatch(Signature signature, Signature declaredSignature)
     {
-        if (!declaredSignature.getTypeVariableConstraints().isEmpty()) {
+        if (declaredSignature.isGeneric()) {
             return false;
         }
         if (!declaredSignature.getReturnType().getBase().equalsIgnoreCase(signature.getReturnType().getBase())) {

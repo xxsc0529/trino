@@ -103,6 +103,7 @@ import static io.trino.plugin.deltalake.TestingDeltaLakeUtils.copyDirectoryConte
 import static io.trino.plugin.deltalake.transactionlog.DeltaLakeSchemaSupport.extractPartitionColumns;
 import static io.trino.plugin.deltalake.transactionlog.DeltaLakeSchemaSupport.getColumnsMetadata;
 import static io.trino.plugin.deltalake.transactionlog.TemporalTimeTravelUtil.findLatestVersionUsingTemporal;
+import static io.trino.plugin.deltalake.transactionlog.TransactionLogUtil.getTransactionLogJsonEntryPath;
 import static io.trino.plugin.hive.HiveTestUtils.HDFS_ENVIRONMENT;
 import static io.trino.plugin.hive.HiveTestUtils.HDFS_FILE_SYSTEM_STATS;
 import static io.trino.spi.type.DateTimeEncoding.packDateTimeWithZone;
@@ -112,6 +113,7 @@ import static io.trino.spi.type.TimeZoneKey.UTC_KEY;
 import static io.trino.testing.TestingNames.randomNameSuffix;
 import static io.trino.type.InternalTypeManager.TESTING_TYPE_MANAGER;
 import static java.lang.String.format;
+import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 import static java.time.ZoneOffset.UTC;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -132,6 +134,7 @@ public class TestDeltaLakeBasic
             new ResourceTable("person_without_last_checkpoint", "databricks73/person_without_last_checkpoint"),
             new ResourceTable("person_without_old_jsons", "databricks73/person_without_old_jsons"),
             new ResourceTable("person_without_checkpoints", "databricks73/person_without_checkpoints"));
+
     private static final List<ResourceTable> OTHER_TABLES = ImmutableList.of(
             new ResourceTable("allow_column_defaults", "deltalake/allow_column_defaults"),
             new ResourceTable("stats_with_minmax_nulls", "deltalake/stats_with_minmax_nulls"),
@@ -139,6 +142,7 @@ public class TestDeltaLakeBasic
             new ResourceTable("liquid_clustering", "deltalake/liquid_clustering"),
             new ResourceTable("region_91_lts", "databricks91/region"),
             new ResourceTable("region_104_lts", "databricks104/region"),
+            new ResourceTable("region_113_lts", "databricks113/region"),
             new ResourceTable("timestamp_ntz", "databricks131/timestamp_ntz"),
             new ResourceTable("timestamp_ntz_partition", "databricks131/timestamp_ntz_partition"),
             new ResourceTable("uniform_hudi", "deltalake/uniform_hudi"),
@@ -206,8 +210,8 @@ public class TestDeltaLakeBasic
                             "('age', 'integer', '', ''), " +
                             "('married', 'boolean', '', ''), " +
                             "('gender', 'varchar', '', ''), " +
-                            "('phones', 'array(row(number varchar, label varchar))', '', ''), " +
-                            "('address', 'row(street varchar, city varchar, state varchar, zip varchar)', '', ''), " +
+                            "('phones', 'array(row(\"number\" varchar, \"label\" varchar))', '', ''), " +
+                            "('address', 'row(\"street\" varchar, \"city\" varchar, \"state\" varchar, \"zip\" varchar)', '', ''), " +
                             "('income', 'double', '', '')");
         }
     }
@@ -237,6 +241,14 @@ public class TestDeltaLakeBasic
     void testDatabricks104()
     {
         assertThat(query("SELECT * FROM region_104_lts"))
+                .skippingTypesCheck() // name and comment columns are unbounded varchar in Delta Lake and bounded varchar in TPCH
+                .matches("SELECT * FROM tpch.tiny.region");
+    }
+
+    @Test
+    void testDatabricks113()
+    {
+        assertThat(query("SELECT * FROM region_113_lts"))
                 .skippingTypesCheck() // name and comment columns are unbounded varchar in Delta Lake and bounded varchar in TPCH
                 .matches("SELECT * FROM tpch.tiny.region");
     }
@@ -403,7 +415,7 @@ public class TestDeltaLakeBasic
             assertThat(partitionValuesParsedType.getFields().stream().collect(onlyElement()).getName().orElseThrow()).isEqualTo(physicalColumnName);
 
             TrinoParquetDataSource dataSource = new TrinoParquetDataSource(new LocalInputFile(checkpoint.toFile()), ParquetReaderOptions.defaultOptions(), new FileFormatDataSourceStats());
-            ParquetMetadata parquetMetadata = MetadataReader.readFooter(dataSource);
+            ParquetMetadata parquetMetadata = MetadataReader.readFooter(dataSource, Optional.empty());
             try (ParquetReader reader = createParquetReader(dataSource, parquetMetadata, ImmutableList.of(addEntryType), List.of("add"))) {
                 List<Object> actual = new ArrayList<>();
                 SourcePage page = reader.nextPage();
@@ -481,7 +493,8 @@ public class TestDeltaLakeBasic
         // Verify optimized parquet file contains the expected physical id and name
         TrinoInputFile inputFile = new LocalInputFile(tableLocation.resolve(addFileEntry.getPath()).toFile());
         ParquetMetadata parquetMetadata = MetadataReader.readFooter(
-                new TrinoParquetDataSource(inputFile, ParquetReaderOptions.defaultOptions(), new FileFormatDataSourceStats()));
+                new TrinoParquetDataSource(inputFile, ParquetReaderOptions.defaultOptions(), new FileFormatDataSourceStats()),
+                Optional.empty());
         FileMetadata fileMetaData = parquetMetadata.getFileMetaData();
         PrimitiveType physicalType = getOnlyElement(fileMetaData.getSchema().getColumns().iterator()).getPrimitiveType();
         assertThat(physicalType.getName()).isEqualTo(physicalName);
@@ -1477,6 +1490,18 @@ public class TestDeltaLakeBasic
     }
 
     @Test
+    void testDeletionVectorsRepeatWithSpecialCharsPartition()
+    {
+        try (TestTable table = newTrinoTable("test_dv", "(x bigint, y varchar) WITH (deletion_vectors_enabled = true, partitioned_by = ARRAY['y'])")) {
+            assertUpdate("INSERT INTO " + table.getName() + " VALUES (1, 'white spaces'), (2, 'white spaces'), (3, 'white spaces')", 3);
+            assertUpdate("DELETE FROM " + table.getName() + " WHERE x = 1", 1);
+            assertUpdate("DELETE FROM " + table.getName() + " WHERE x = 2", 1);
+            assertThat(query("SELECT * FROM " + table.getName()))
+                    .matches("VALUES (bigint '3', varchar 'white spaces')");
+        }
+    }
+
+    @Test
     void testDeletionVectorsPages()
             throws Exception
     {
@@ -1499,7 +1524,7 @@ public class TestDeltaLakeBasic
         assertQueryReturnsEmptyResult(session, "SELECT * FROM " + tableName + " WHERE id = 20001");
         assertThat(query(session, "SELECT * FROM " + tableName + " WHERE id = 99999")).matches("VALUES 99999");
 
-        assertThat(query(session, "SELECT id, _change_type, _commit_version FROM TABLE(system.table_changes('tpch', '" +tableName+ "')) WHERE id = 20001"))
+        assertThat(query(session, "SELECT id, _change_type, _commit_version FROM TABLE(system.table_changes('tpch', '" + tableName + "')) WHERE id = 20001"))
                 .matches("VALUES (20001, VARCHAR 'insert', BIGINT '1'), (20001, VARCHAR 'update_preimage', BIGINT '2')");
 
         assertUpdate("DROP TABLE " + tableName);
@@ -1585,7 +1610,7 @@ public class TestDeltaLakeBasic
                         "('simple_variant', 'json')," +
                         "('array_variant', 'array(json)')," +
                         "('map_variant', 'map(varchar, json)')," +
-                        "('struct_variant', 'row(x json)')," +
+                        "('struct_variant', 'row(\"x\" json)')," +
                         "('col_string', 'varchar')");
 
         assertThat(query("SELECT col_int, simple_variant, array_variant[1], map_variant['key1'], struct_variant.x, col_string FROM variant"))
@@ -1599,6 +1624,9 @@ public class TestDeltaLakeBasic
         assertQueryFails("INSERT INTO variant VALUES (2, null, null, null, null, 'new data')", "Unsupported writer features: .*");
     }
 
+    /**
+     * @see databricks154.test_variant_null
+     */
     @Test
     public void testVariantReadNull()
             throws Exception
@@ -1612,11 +1640,22 @@ public class TestDeltaLakeBasic
                 .matches("VALUES 3");
 
         assertThat(query("SELECT * FROM " + tableName + " WHERE id = 3"))
-                .matches("VALUES (3, JSON 'null')");
+                .skippingTypesCheck()
+                .matches("VALUES (3, JSON 'null', NULL)");
         assertThat(query("SELECT * FROM " + tableName + " WHERE id = 4"))
-                .matches("VALUES (4, CAST(NULL AS JSON))");
+                .skippingTypesCheck()
+                .matches("VALUES (4, NULL, NULL)");
         assertThat(query("SELECT id FROM " + tableName + " WHERE x IS NULL"))
                 .matches("VALUES 4");
+
+        assertThat(query("TABLE " + tableName))
+                .skippingTypesCheck()
+                .matches("VALUES " +
+                         "(1, JSON '{\"a\":1}', MAP(ARRAY['key1'], ARRAY[NULL]))," +
+                         "(2, JSON '{\"a\":2}', MAP(ARRAY['key1'], ARRAY[JSON '{\"key\":\"value\"}']))," +
+                         "(3, JSON 'null', NULL)," +
+                         "(4, NULL, NULL)," +
+                         "(5, JSON '{\"a\":5}', NULL)");
     }
 
     /**
@@ -2013,10 +2052,6 @@ public class TestDeltaLakeBasic
         copyDirectoryContents(new File(Resources.getResource(resourceName).toURI()).toPath(), tableLocation);
         assertUpdate("CALL system.register_table(CURRENT_SCHEMA, '%s', '%s')".formatted(tableName, tableLocation.toUri()));
 
-        Session session = Session.builder(getQueryRunner().getDefaultSession())
-                .setCatalogSessionProperty("delta", "checkpoint_filtering_enabled", "false")
-                .build();
-
         assertThat(query("SELECT id FROM " + tableName + " WHERE int_part = 10 AND string_part = 'part1'"))
                 .matches("VALUES 1");
         assertThat(query("SELECT id FROM " + tableName + " WHERE int_part != 10"))
@@ -2027,14 +2062,14 @@ public class TestDeltaLakeBasic
                 .matches("VALUES 1, 2");
         assertThat(query("SELECT id FROM " + tableName + " WHERE int_part IN (10, 20)"))
                 .matches("VALUES 1, 2");
-        assertThat(query(session, "SELECT id FROM " + tableName + " WHERE int_part IS NULL AND string_part IS NULL"))
+        assertThat(query("SELECT id FROM " + tableName + " WHERE int_part IS NULL AND string_part IS NULL"))
                 .matches("VALUES 3");
-        assertThat(query(session, "SELECT id FROM " + tableName + " WHERE int_part IS NOT NULL AND string_part IS NOT NULL"))
+        assertThat(query("SELECT id FROM " + tableName + " WHERE int_part IS NOT NULL AND string_part IS NOT NULL"))
                 .matches("VALUES 1, 2");
 
-        assertThat(query(session, "SELECT id FROM " + tableName + " WHERE int_part = 10 AND string_part = 'unmatched partition condition'"))
+        assertThat(query("SELECT id FROM " + tableName + " WHERE int_part = 10 AND string_part = 'unmatched partition condition'"))
                 .returnsEmptyResult();
-        assertThat(query(session, "SELECT id FROM " + tableName + " WHERE int_part IS NULL AND string_part IS NOT NULL"))
+        assertThat(query("SELECT id FROM " + tableName + " WHERE int_part IS NULL AND string_part IS NOT NULL"))
                 .returnsEmptyResult();
     }
 
@@ -2229,10 +2264,7 @@ public class TestDeltaLakeBasic
         copyDirectoryContents(new File(Resources.getResource("databricks133/partition_values_parsed_case_sensitive").toURI()).toPath(), tableLocation);
         assertUpdate("CALL system.register_table(CURRENT_SCHEMA, '%s', '%s')".formatted(tableName, tableLocation.toUri()));
 
-        Session session = Session.builder(getQueryRunner().getDefaultSession())
-                .setCatalogSessionProperty("delta", "checkpoint_filtering_enabled", "false")
-                .build();
-        assertThat(query(session, "SELECT * FROM " + tableName))
+        assertThat(query("SELECT * FROM " + tableName))
                 .skippingTypesCheck()
                 .matches(
                         """
@@ -2244,7 +2276,7 @@ public class TestDeltaLakeBasic
 
         // Create a new checkpoint
         assertUpdate("INSERT INTO " + tableName + " VALUES (400, 4, 'kon')", 1);
-        assertThat(query(session, "SELECT * FROM " + tableName))
+        assertThat(query("SELECT * FROM " + tableName))
                 .skippingTypesCheck()
                 .matches(
                         """
@@ -2475,7 +2507,7 @@ public class TestDeltaLakeBasic
 
         assertThat(query("DESCRIBE " + tableName)).result().projected("Column", "Type")
                 .skippingTypesCheck()
-                .matches("VALUES ('s', 'row(field integer)'), ('m', 'map(integer, integer)'), ('a', 'array(integer)')");
+                .matches("VALUES ('s', 'row(\"field\" integer)'), ('m', 'map(integer, integer)'), ('a', 'array(integer)')");
         assertThat(query("SELECT * FROM " + tableName))
                 .matches("VALUES " +
                         "(CAST(ROW(127) AS ROW(field integer)), MAP(ARRAY[-128], ARRAY[127]), ARRAY[127])," +
@@ -2711,7 +2743,8 @@ public class TestDeltaLakeBasic
                             if (!content.equals(newContent)) {
                                 Files.write(file, newContent.getBytes(StandardCharsets.UTF_8), StandardOpenOption.TRUNCATE_EXISTING);
                             }
-                        } catch (IOException e) {
+                        }
+                        catch (IOException e) {
                             throw new RuntimeException(e);
                         }
                     });
@@ -2725,6 +2758,50 @@ public class TestDeltaLakeBasic
                 .filter(log -> log.getMetaData() != null)
                 .collect(onlyElement());
         return transactionLog.getMetaData();
+    }
+
+    @Test
+    public void testDeepClonedTableWithCheckpointVersionZero()
+            throws Exception
+    {
+        String resource = "databricks154/clone_checkpoint_version_zero/checkpoint_v2/deep_cloned_table";
+        String tableName = "test_deep_cloned_table" + randomNameSuffix();
+        Path tableLocation = catalogDir.resolve(tableName);
+        copyDirectoryContents(new File(Resources.getResource(resource).toURI()).toPath(), tableLocation);
+        assertUpdate("CALL system.register_table(CURRENT_SCHEMA, '%s', '%s')".formatted(tableName, tableLocation.toUri()));
+
+        assertThat(query("SELECT * FROM " + tableName))
+                .matches("""
+                        VALUES
+                        (1, VARCHAR 'Alice', 25),
+                        (2, VARCHAR 'Bob', 30),
+                        (3, VARCHAR 'Charlie', 28)
+                        """);
+        assertUpdate("DROP TABLE " + tableName);
+    }
+
+    @Test
+    public void testShallowClonedTableWithCheckpointVersionZero()
+            throws Exception
+    {
+        String resource = "databricks154/clone_checkpoint_version_zero/checkpoint_v2/shallow_cloned_table";
+        String dataFileResource = "databricks154/clone_checkpoint_version_zero/checkpoint_v2/clone_source/part-00000-d47cc824-9a87-40c6-9e6b-528d933a30f9-c000.snappy.parquet";
+        String tableName = "test_shallow_cloned_table" + randomNameSuffix();
+        Path tableLocation = catalogDir.resolve(tableName);
+        Path dataFilePath = new File(Resources.getResource(dataFileResource).toURI()).toPath();
+        Path targetFilePath = tableLocation.resolve("part-00000-d47cc824-9a87-40c6-9e6b-528d933a30f9-c000.snappy.parquet");
+        copyDirectoryContents(new File(Resources.getResource(resource).toURI()).toPath(), tableLocation);
+        Files.copy(dataFilePath, targetFilePath, REPLACE_EXISTING);
+        assertUpdate("CALL system.register_table(CURRENT_SCHEMA, '%s', '%s')".formatted(tableName, tableLocation.toUri()));
+
+        assertThat(query("SELECT * FROM " + tableName))
+                .matches("""
+                        VALUES
+                        (1, VARCHAR 'Alice', 25),
+                        (2, VARCHAR 'Bob', 30),
+                        (3, VARCHAR 'Charlie', 28)
+                        """);
+        assertUpdate("DROP TABLE " + tableName);
     }
 
     private static ProtocolEntry loadProtocolEntry(long entryNumber, Path tableLocation)
@@ -2751,7 +2828,8 @@ public class TestDeltaLakeBasic
     private static List<DeltaLakeTransactionLogEntry> getEntriesFromJson(long entryNumber, String transactionLogDir)
             throws IOException
     {
-        return TransactionLogTail.getEntriesFromJson(entryNumber, transactionLogDir, FILE_SYSTEM, DEFAULT_TRANSACTION_LOG_MAX_CACHED_SIZE)
+
+        return TransactionLogTail.getEntriesFromJson(entryNumber, FILE_SYSTEM.newInputFile(getTransactionLogJsonEntryPath(transactionLogDir, entryNumber)), DEFAULT_TRANSACTION_LOG_MAX_CACHED_SIZE)
                 .orElseThrow()
                 .getEntriesList(FILE_SYSTEM);
     }

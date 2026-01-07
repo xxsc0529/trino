@@ -24,6 +24,7 @@ import io.trino.FeaturesConfig;
 import io.trino.Session;
 import io.trino.SystemSessionProperties;
 import io.trino.client.NodeVersion;
+import io.trino.connector.CatalogHandle;
 import io.trino.connector.CatalogServiceProvider;
 import io.trino.connector.MockConnectorFactory;
 import io.trino.connector.StaticConnectorFactory;
@@ -68,15 +69,18 @@ import io.trino.security.AccessControl;
 import io.trino.security.AccessControlConfig;
 import io.trino.security.AccessControlManager;
 import io.trino.security.AllowAllAccessControl;
-import io.trino.spi.connector.CatalogHandle;
+import io.trino.server.protocol.spooling.SpoolingEnabledConfig;
 import io.trino.spi.connector.CatalogSchemaTableName;
 import io.trino.spi.connector.ColumnMetadata;
 import io.trino.spi.connector.Connector;
+import io.trino.spi.connector.ConnectorMaterializedViewDefinition.WhenStaleBehavior;
 import io.trino.spi.connector.ConnectorMetadata;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorTableMetadata;
 import io.trino.spi.connector.ConnectorTransactionHandle;
 import io.trino.spi.connector.SchemaTableName;
+import io.trino.spi.eventlistener.ColumnDetail;
+import io.trino.spi.eventlistener.ColumnLineageInfo;
 import io.trino.spi.security.Identity;
 import io.trino.spi.session.PropertyMetadata;
 import io.trino.spi.transaction.IsolationLevel;
@@ -109,6 +113,7 @@ import org.junit.jupiter.api.parallel.Execution;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.function.Consumer;
 
@@ -138,6 +143,7 @@ import static io.trino.spi.StandardErrorCode.INVALID_ARGUMENTS;
 import static io.trino.spi.StandardErrorCode.INVALID_COLUMN_REFERENCE;
 import static io.trino.spi.StandardErrorCode.INVALID_COPARTITIONING;
 import static io.trino.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
+import static io.trino.spi.StandardErrorCode.INVALID_GRACE_PERIOD;
 import static io.trino.spi.StandardErrorCode.INVALID_LABEL;
 import static io.trino.spi.StandardErrorCode.INVALID_LIMIT_CLAUSE;
 import static io.trino.spi.StandardErrorCode.INVALID_LITERAL;
@@ -186,6 +192,7 @@ import static io.trino.spi.StandardErrorCode.TOO_MANY_GROUPING_SETS;
 import static io.trino.spi.StandardErrorCode.TYPE_MISMATCH;
 import static io.trino.spi.StandardErrorCode.VIEW_IS_RECURSIVE;
 import static io.trino.spi.StandardErrorCode.VIEW_IS_STALE;
+import static io.trino.spi.connector.ConnectorMaterializedViewDefinition.WhenStaleBehavior.INLINE;
 import static io.trino.spi.connector.SaveMode.FAIL;
 import static io.trino.spi.session.PropertyMetadata.integerProperty;
 import static io.trino.spi.session.PropertyMetadata.stringProperty;
@@ -204,6 +211,7 @@ import static io.trino.spi.type.VarcharType.createVarcharType;
 import static io.trino.testing.TestingAccessControlManager.TestingPrivilegeType.SELECT_COLUMN;
 import static io.trino.testing.TestingAccessControlManager.privilege;
 import static io.trino.testing.TestingEventListenerManager.emptyEventListenerManager;
+import static io.trino.testing.TestingMetadata.STALE_MV_STALENESS;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 import static io.trino.testing.TransactionBuilder.transaction;
 import static io.trino.testing.assertions.TrinoExceptionAssert.assertTrinoExceptionThrownBy;
@@ -1140,6 +1148,7 @@ public class TestAnalyzer
     {
         Session session = testSessionBuilder(new SessionPropertyManager(new SystemSessionProperties(
                 new QueryManagerConfig(),
+                new SpoolingEnabledConfig(),
                 new TaskManagerConfig(),
                 new MemoryManagerConfig(),
                 new FeaturesConfig().setMaxGroupingSets(2048),
@@ -2954,7 +2963,7 @@ public class TestAnalyzer
                 "          )" +
                 "          SELECT * from t")
                 .hasErrorCode(TYPE_MISMATCH)
-                .hasMessage("line 1:82: recursion step relation output type (decimal(2,1)) is not coercible to recursion base relation output type (decimal(1,0)) at column 1");
+                .hasMessage("line 1:82: recursion step relation output type (decimal(3,1)) is not coercible to recursion base relation output type (decimal(1,0)) at column 1");
 
         assertFails("WITH RECURSIVE t(n) AS (" +
                 "          SELECT * FROM (VALUES('a'), ('b')) AS t(n)" +
@@ -5791,19 +5800,68 @@ public class TestAnalyzer
     @Test
     public void testAnalyzeFreshMaterializedView()
     {
-        analyze("SELECT * FROM fresh_materialized_view");
+        testAnalyzeFreshMaterializedView(INLINE);
+        testAnalyzeFreshMaterializedView(WhenStaleBehavior.FAIL);
+    }
+
+    private void testAnalyzeFreshMaterializedView(WhenStaleBehavior whenStaleBehavior)
+    {
+        String suffix = resolveMaterializedViewNameSuffix(whenStaleBehavior);
+
+        analyze("SELECT * FROM fresh_materialized_view" + suffix);
+        analyze("SELECT * FROM fresh_materialized_view_non_existent_table" + suffix);
+        assertFails("REFRESH MATERIALIZED VIEW fresh_materialized_view_non_existent_table" + suffix)
+                .hasErrorCode(TABLE_NOT_FOUND)
+                .hasMessage("line 1:18: Table 'tpch.s1.non_existent_table' does not exist");
+    }
+
+    @Test
+    public void testAnalyzeStaleMaterializedView()
+    {
+        testAnalyzeStaleMaterializedViewWithWhenStaleInline(INLINE);
+
+        assertFails("SELECT * FROM stale_materialized_view_when_stale_fail")
+                .hasErrorCode(VIEW_IS_STALE)
+                .hasMessage("line 1:15: Materialized view 'tpch.s1.stale_materialized_view_when_stale_fail' is stale");
+        assertFails("SELECT * FROM stale_materialized_view_non_existent_table_when_stale_fail")
+                .hasErrorCode(VIEW_IS_STALE)
+                .hasMessage("line 1:15: Materialized view 'tpch.s1.stale_materialized_view_non_existent_table_when_stale_fail' is stale");
+        assertFails("REFRESH MATERIALIZED VIEW stale_materialized_view_non_existent_table_when_stale_fail")
+                .hasErrorCode(TABLE_NOT_FOUND)
+                .hasMessage("line 1:18: Table 'tpch.s1.non_existent_table' does not exist");
+    }
+
+    public void testAnalyzeStaleMaterializedViewWithWhenStaleInline(WhenStaleBehavior whenStaleBehavior)
+    {
+        String suffix = resolveMaterializedViewNameSuffix(whenStaleBehavior);
+
+        analyze("SELECT * FROM stale_materialized_view" + suffix);
+        assertFails("SELECT * FROM stale_materialized_view_non_existent_table" + suffix)
+                .hasErrorCode(INVALID_VIEW)
+                .hasMessage("line 1:15: Failed analyzing stored view 'tpch.s1.stale_materialized_view_non_existent_table" + suffix + "': line 1:18: Table 'tpch.s1.non_existent_table' does not exist");
+        assertFails("REFRESH MATERIALIZED VIEW stale_materialized_view_non_existent_table" + suffix)
+                .hasErrorCode(TABLE_NOT_FOUND)
+                .hasMessage("line 1:18: Table 'tpch.s1.non_existent_table' does not exist");
     }
 
     @Test
     public void testAnalyzeInvalidFreshMaterializedView()
     {
-        assertFails("SELECT * FROM fresh_materialized_view_mismatched_column_count")
+        testAnalyzeInvalidFreshMaterializedView(INLINE);
+        testAnalyzeInvalidFreshMaterializedView(WhenStaleBehavior.FAIL);
+    }
+
+    private void testAnalyzeInvalidFreshMaterializedView(WhenStaleBehavior whenStaleBehavior)
+    {
+        String suffix = resolveMaterializedViewNameSuffix(whenStaleBehavior);
+
+        assertFails("SELECT * FROM fresh_materialized_view_mismatched_column_count" + suffix)
                 .hasErrorCode(INVALID_VIEW)
                 .hasMessage("line 1:15: storage table column count (2) does not match column count derived from the materialized view query analysis (1)");
-        assertFails("SELECT * FROM fresh_materialized_view_mismatched_column_name")
+        assertFails("SELECT * FROM fresh_materialized_view_mismatched_column_name" + suffix)
                 .hasErrorCode(INVALID_VIEW)
                 .hasMessage("line 1:15: column [b] of type bigint projected from storage table at position 1 has a different name from column [c] of type bigint stored in materialized view definition");
-        assertFails("SELECT * FROM fresh_materialized_view_mismatched_column_type")
+        assertFails("SELECT * FROM fresh_materialized_view_mismatched_column_type" + suffix)
                 .hasErrorCode(INVALID_VIEW)
                 .hasMessage("line 1:15: cannot cast column [b] of type bigint projected from storage table at position 1 into column [b] of type row(tinyint) stored in view definition");
     }
@@ -5811,22 +5869,64 @@ public class TestAnalyzer
     @Test
     public void testAnalyzeMaterializedViewWithAccessControl()
     {
+        testAnalyzeMaterializedViewWithAccessControl(INLINE);
+        testAnalyzeMaterializedViewWithAccessControl(WhenStaleBehavior.FAIL);
+    }
+
+    private void testAnalyzeMaterializedViewWithAccessControl(WhenStaleBehavior whenStaleBehavior)
+    {
+        String suffix = resolveMaterializedViewNameSuffix(whenStaleBehavior);
+
         TestingAccessControlManager accessControlManager = new TestingAccessControlManager(transactionManager, emptyEventListenerManager(), new SecretsResolver(ImmutableMap.of()));
         accessControlManager.setSystemAccessControls(List.of(AllowAllSystemAccessControl.INSTANCE));
 
-        analyze("SELECT * FROM fresh_materialized_view");
+        analyze(CLIENT_SESSION, "SELECT * FROM fresh_materialized_view" + suffix, accessControlManager);
 
         // materialized view analysis should succeed even if access to storage table is denied when querying the table directly
         accessControlManager.deny(privilege("t2.a", SELECT_COLUMN));
-        analyze("SELECT * FROM fresh_materialized_view");
+        analyze(CLIENT_SESSION, "SELECT * FROM fresh_materialized_view" + suffix, accessControlManager);
 
-        accessControlManager.deny(privilege("fresh_materialized_view.a", SELECT_COLUMN));
+        accessControlManager.deny(privilege("fresh_materialized_view" + suffix + ".a", SELECT_COLUMN));
         assertFails(
                 CLIENT_SESSION,
-                "SELECT * FROM fresh_materialized_view",
+                "SELECT * FROM fresh_materialized_view" + suffix,
                 accessControlManager)
                 .hasErrorCode(PERMISSION_DENIED)
-                .hasMessage("Access Denied: Cannot select from columns [a, b] in table or view tpch.s1.fresh_materialized_view");
+                .hasMessage("Access Denied: Cannot select from columns [a, b] in table or view tpch.s1.fresh_materialized_view" + suffix);
+        accessControlManager.reset();
+
+        // Deny access to the table referenced by the underlying query
+        accessControlManager.denyIdentityTable((_, table) -> !"t1".equals(table));
+        // When an MV is fresh or within the grace period, analysis of the underlying query is not performed,
+        // so access control checks on the tables referenced by the query are not executed.
+        analyze(CLIENT_SESSION, "SELECT * FROM fresh_materialized_view" + suffix, accessControlManager);
+        assertFails(CLIENT_SESSION, "REFRESH MATERIALIZED VIEW fresh_materialized_view" + suffix, accessControlManager)
+                .hasErrorCode(PERMISSION_DENIED)
+                .hasMessage("Access Denied: Cannot select from columns [a, b] in table or view tpch.s1.t1");
+        if (whenStaleBehavior == INLINE) {
+            // Now we check that when the MV is stale, access to the underlying tables is checked.
+            assertFails(CLIENT_SESSION, "SELECT * FROM stale_materialized_view" + suffix, accessControlManager)
+                    .hasErrorCode(PERMISSION_DENIED)
+                    .hasMessage("Access Denied: View owner does not have sufficient privileges: View owner 'some user' cannot create view that selects from tpch.s1.t1");
+        }
+        else {
+            assertFails(CLIENT_SESSION, "SELECT * FROM stale_materialized_view" + suffix, accessControlManager)
+                    .hasErrorCode(VIEW_IS_STALE)
+                    .hasMessage("line 1:15: Materialized view 'tpch.s1.stale_materialized_view_when_stale_fail' is stale");
+        }
+
+        assertFails(CLIENT_SESSION, "REFRESH MATERIALIZED VIEW stale_materialized_view" + suffix, accessControlManager)
+                .hasErrorCode(PERMISSION_DENIED)
+                .hasMessage("Access Denied: Cannot select from columns [a, b] in table or view tpch.s1.t1");
+    }
+
+    @Test
+    public void testCreateMaterializedViewWithNegativeGracePeriod()
+    {
+        assertFails("CREATE MATERIALIZED VIEW mv_negative_grace_period GRACE PERIOD INTERVAL -'1' HOUR AS SELECT * FROM nation")
+                .hasErrorCode(INVALID_GRACE_PERIOD)
+                .hasMessage("line 1:64: Grace period cannot be negative")
+                .hasLocation(1, 64);
     }
 
     @Test
@@ -7430,6 +7530,369 @@ public class TestAnalyzer
                 .hasMessage("line 1:46: UNNEST cannot contain aggregations, window functions or grouping operations: [COUNT(t.a)]");
     }
 
+    @Test
+    public void testSelectColumnsLineageInfo()
+    {
+        String sql = "SELECT a, b + 1 AS b1, 'C' as literal, a + b FROM (VALUES (1, 2)) t(a, b)";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo.size()).isEqualTo(4);
+
+        // Check first column lineage
+        ColumnLineageInfo colA = lineageInfo.getFirst();
+        assertThat(colA.name()).isEqualTo("a");
+        assertThat(colA.sourceColumns()).isEmpty(); // 'a' is a direct value from the VALUES clause
+
+        // Check second column lineage
+        ColumnLineageInfo colB1 = lineageInfo.get(1);
+        assertThat(colB1.name()).isEqualTo("b1");
+        assertThat(colB1.sourceColumns()).isEmpty(); // 'b1' is derived from 'b + 1', which is a direct value from the VALUES clause
+
+        // Check third column lineage
+        ColumnLineageInfo colLiteral = lineageInfo.get(2);
+        assertThat(colLiteral.name()).isEqualTo("literal");
+        assertThat(colLiteral.sourceColumns()).isEmpty(); // 'literal' is a literal value
+
+        // Check fourth column lineage
+        ColumnLineageInfo colAB = lineageInfo.get(3);
+        assertThat(colAB.name()).isEmpty(); // anonymous
+        assertThat(colAB.sourceColumns()).isEmpty(); // 'a + b' is derived from the values in the VALUES clause
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoAggregateFunction() {
+        String sql = "SELECT SUM(a) FROM t1 WHERE b > 1";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo.size()).isEqualTo(1);
+
+        // Check the column lineage
+        ColumnLineageInfo colCount = lineageInfo.getFirst();
+        assertThat(colCount.name()).isEmpty(); // anonymous
+        assertThat(colCount.sourceColumns()).containsExactlyInAnyOrder(
+                new ColumnDetail("tpch", "s1", "t1", "a"));
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithUnion()
+    {
+        String sql = "SELECT c AS unionized FROM t1 UNION SELECT b FROM t2 UNION SELECT a FROM t3";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo.size()).isEqualTo(1);
+
+        // Check the column lineage
+        ColumnLineageInfo colA = lineageInfo.getFirst();
+        assertThat(colA.name()).isEqualTo("unionized");
+        assertThat(colA.sourceColumns()).containsExactlyInAnyOrder(
+                new ColumnDetail("tpch","s1","t1", "c"),
+                new ColumnDetail("tpch","s1","t2", "b"),
+                new ColumnDetail("tpch","s1","t3", "a"));
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithClause()
+    {
+        String sql = "WITH cte AS (SELECT a FROM t1)\n" + "SELECT a FROM cte UNION SELECT b FROM t2";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo.size()).isEqualTo(1);
+
+        // Check the column lineage
+        ColumnLineageInfo colA = lineageInfo.getFirst();
+        assertThat(colA.name()).isEqualTo("a");
+        // The source columns should include both 'a' from t1 and 'b' from t2
+        assertThat(colA.sourceColumns()).containsExactlyInAnyOrder(
+                new ColumnDetail("tpch","s1","t1", "a"),
+                new ColumnDetail("tpch","s1","t2", "b"));
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithSubquery()
+    {
+    String sql = "SELECT (SELECT max(a)+min(b) FROM t2) AS min_max FROM t1 UNION SELECT max(a) FROM t3";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo.size()).isEqualTo(1);
+
+        // Check the column lineage
+        ColumnLineageInfo colA = lineageInfo.getFirst();
+        assertThat(colA.name()).isEqualTo("min_max");
+        // The source columns should include both 'a' and 'b' from t2 in the subquery and t3.a from the union
+        assertThat(colA.sourceColumns()).containsExactlyInAnyOrder(
+                new ColumnDetail("tpch","s1","t2", "a"),
+                new ColumnDetail("tpch","s1","t2", "b"),
+                new ColumnDetail("tpch","s1","t3", "a"));
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoNestedSet()
+    {
+        String sql = "SELECT a FROM t1 UNION (SELECT b FROM t2 INTERSECT SELECT b FROM t3)";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo.size()).isEqualTo(1);
+
+        // Check the column lineage
+        ColumnLineageInfo colA = lineageInfo.getFirst();
+        assertThat(colA.name()).isEqualTo("a");
+        // The source columns should include both 'a' from the subquery and 'b' from t2
+        assertThat(colA.sourceColumns()).containsExactlyInAnyOrder(
+                new ColumnDetail("tpch","s1","t1", "a"),
+                new ColumnDetail("tpch","s1","t2", "b"),
+                new ColumnDetail("tpch","s1","t3", "b"));
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoRecursive()
+    {
+        String sql = "WITH RECURSIVE a(x) AS (SELECT a FROM t1) SELECT * FROM a";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo.size()).isEqualTo(1);
+
+        // Check the column lineage
+        ColumnLineageInfo colA = lineageInfo.getFirst();
+        assertThat(colA.name()).isEqualTo("x");
+        // The source column should include 'a' from t1
+        assertThat(colA.sourceColumns()).containsExactlyInAnyOrder(
+                new ColumnDetail("tpch", "s1", "t1", "a"));
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoRowFromJoin()
+    {
+        String sql = "SELECT ROW(t1.a, t2.b) AS row_field FROM t1 JOIN t2 ON t1.a = t2.a";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo.size()).isEqualTo(1);
+
+        // Check the column lineage for the ROW field
+        ColumnLineageInfo colRow = lineageInfo.getFirst();
+        assertThat(colRow.name()).isEqualTo("row_field");
+        // The ROW constructor should track lineage from both tables in the JOIN
+        assertThat(colRow.sourceColumns()).containsExactlyInAnyOrder(
+                new ColumnDetail("tpch", "s1", "t1", "a"),
+                new ColumnDetail("tpch", "s1", "t2", "b"));
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithExplain()
+    {
+        String sql = "EXPLAIN SELECT a FROM t1";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isEmpty();
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithInsert()
+    {
+        String sql = "INSERT INTO t1 SELECT a, b, a, b FROM t2";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isEmpty();
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithAlterTable()
+    {
+        String sql = "ALTER TABLE t1 ADD COLUMN c bigint";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isEmpty();
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithSetColumnType()
+    {
+        String sql = "ALTER TABLE t1 ALTER COLUMN a SET DATA TYPE varchar";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isEmpty();
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithSession()
+    {
+        String sql = "WITH SESSION a = 1 SELECT a FROM t1";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo).hasSize(1);
+        assertThat(lineageInfo.get(0).sourceColumns()).containsExactly(
+                new ColumnDetail("tpch", "s1", "t1", "a"));
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithFunction()
+    {
+        String sql = "WITH FUNCTION my_abs(x bigint) RETURNS bigint RETURN abs(x) SELECT my_abs(a) FROM t1";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo).hasSize(1);
+        assertThat(lineageInfo.get(0).sourceColumns()).containsExactly(
+                new ColumnDetail("tpch", "s1", "t1", "a"));
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithNamedQuery()
+    {
+        String sql = "WITH cte AS (SELECT a FROM t1) SELECT a FROM cte";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo).hasSize(1);
+        assertThat(lineageInfo.get(0).sourceColumns()).containsExactly(
+                new ColumnDetail("tpch", "s1", "t1", "a"));
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithTable()
+    {
+        String sql = "TABLE t1";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo).hasSize(4);
+        assertThat(lineageInfo.get(0).sourceColumns()).containsExactly(
+                new ColumnDetail("tpch", "s1", "t1", "a"));
+        assertThat(lineageInfo.get(1).sourceColumns()).containsExactly(
+                new ColumnDetail("tpch", "s1", "t1", "b"));
+        assertThat(lineageInfo.get(2).sourceColumns()).containsExactly(
+                new ColumnDetail("tpch", "s1", "t1", "c"));
+        assertThat(lineageInfo.get(3).sourceColumns()).containsExactly(
+                new ColumnDetail("tpch", "s1", "t1", "d"));
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithValues()
+    {
+        String sql = "VALUES (1, 2)";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo).hasSize(2);
+        // VALUES have no source columns
+        assertThat(lineageInfo.get(0).sourceColumns()).isEmpty();
+        assertThat(lineageInfo.get(1).sourceColumns()).isEmpty();
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithParentheses()
+    {
+        String sql = "(SELECT a FROM t1)";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo).hasSize(1);
+        assertThat(lineageInfo.get(0).sourceColumns()).containsExactly(
+                new ColumnDetail("tpch", "s1", "t1", "a"));
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithIntersect()
+    {
+        String sql = "SELECT a FROM t1 INTERSECT SELECT a FROM t2";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo).hasSize(1);
+        assertThat(lineageInfo.get(0).sourceColumns()).containsExactlyInAnyOrder(
+                new ColumnDetail("tpch", "s1", "t1", "a"),
+                new ColumnDetail("tpch", "s1", "t2", "a"));
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithExplainAnalyze()
+    {
+        String sql = "EXPLAIN ANALYZE SELECT a FROM t1";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isEmpty();
+    }
+
+    @Test
+    public void testSelectColumnsLineageInfoWithShow()
+    {
+        String sql = "SHOW SCHEMAS";
+
+        Analysis analysis = analyze(sql);
+
+        Optional<List<ColumnLineageInfo>> optionalLineageInfo = analysis.getSelectColumnsLineageInfo();
+        assertThat(optionalLineageInfo).isPresent();
+        List<ColumnLineageInfo> lineageInfo = optionalLineageInfo.get();
+        assertThat(lineageInfo).hasSize(1);
+        assertThat(lineageInfo.get(0).name()).isEqualTo("Schema");
+        assertThat(lineageInfo.get(0).sourceColumns()).hasSize(1);
+        assertThat(lineageInfo.get(0).sourceColumns()).contains(
+                new ColumnDetail("tpch", "information_schema", "schemata", "schema_name"));
+    }
+
     @BeforeAll
     public void setup()
     {
@@ -7522,6 +7985,7 @@ public class TestAnalyzer
                 Optional.of("s1"),
                 ImmutableList.of(new ViewColumn("a", BIGINT.getTypeId(), Optional.empty())),
                 Optional.of(Duration.ZERO),
+                INLINE,
                 Optional.of("comment"),
                 Identity.ofUser("user"),
                 ImmutableList.of(),
@@ -7651,6 +8115,7 @@ public class TestAnalyzer
                         Optional.of("s1"),
                         ImmutableList.of(new ViewColumn("a", BIGINT.getTypeId(), Optional.empty())),
                         Optional.of(Duration.ZERO),
+                        INLINE,
                         Optional.empty(),
                         Identity.ofUser("some user"),
                         ImmutableList.of(),
@@ -7695,27 +8160,79 @@ public class TestAnalyzer
                         ImmutableList.of(new ColumnMetadata("a", BIGINT))),
                 FAIL));
 
-        QualifiedObjectName freshMaterializedView = new QualifiedObjectName(TPCH_CATALOG, "s1", "fresh_materialized_view");
+        createMaterializedViews(metadata, testingConnectorMetadata, INLINE);
+        createMaterializedViews(metadata, testingConnectorMetadata, WhenStaleBehavior.FAIL);
+    }
+
+    private void createMaterializedViews(Metadata metadata, TestingMetadata testingConnectorMetadata, WhenStaleBehavior whenStaleBehavior)
+    {
+        String suffix = resolveMaterializedViewNameSuffix(whenStaleBehavior);
+
+        MaterializedViewDefinition materializedView = new MaterializedViewDefinition(
+                "SELECT a, b FROM t1",
+                Optional.of(TPCH_CATALOG),
+                Optional.of("s1"),
+                ImmutableList.of(new ViewColumn("a", BIGINT.getTypeId(), Optional.empty()), new ViewColumn("b", BIGINT.getTypeId(), Optional.empty())),
+                Optional.of(STALE_MV_STALENESS.minusHours(1)), // Minus 1 hour to make MVs not marked as fresh become stale immediately. This doesn’t affect those marked as fresh.
+                whenStaleBehavior,
+                Optional.empty(),
+                Identity.ofUser("some user"),
+                ImmutableList.of(),
+                // t3 has a, b column and hidden column x
+                Optional.of(new CatalogSchemaTableName(TPCH_CATALOG, "s1", "t3")));
+
+        QualifiedObjectName freshMaterializedView = new QualifiedObjectName(TPCH_CATALOG, "s1", "fresh_materialized_view" + suffix);
         inSetupTransaction(session -> metadata.createMaterializedView(
                 session,
                 freshMaterializedView,
-                new MaterializedViewDefinition(
-                        "SELECT a, b FROM t1",
-                        Optional.of(TPCH_CATALOG),
-                        Optional.of("s1"),
-                        ImmutableList.of(new ViewColumn("a", BIGINT.getTypeId(), Optional.empty()), new ViewColumn("b", BIGINT.getTypeId(), Optional.empty())),
-                        Optional.empty(),
-                        Optional.empty(),
-                        Identity.ofUser("some user"),
-                        ImmutableList.of(),
-                        // t3 has a, b column and hidden column x
-                        Optional.of(new CatalogSchemaTableName(TPCH_CATALOG, "s1", "t3"))),
+                materializedView,
                 ImmutableMap.of(),
                 false,
                 false));
         testingConnectorMetadata.markMaterializedViewIsFresh(freshMaterializedView.asSchemaTableName());
 
-        QualifiedObjectName freshMaterializedViewMismatchedColumnCount = new QualifiedObjectName(TPCH_CATALOG, "s1", "fresh_materialized_view_mismatched_column_count");
+        QualifiedObjectName staleMaterializedView = new QualifiedObjectName(TPCH_CATALOG, "s1", "stale_materialized_view" + suffix);
+        inSetupTransaction(session -> metadata.createMaterializedView(
+                session,
+                staleMaterializedView,
+                materializedView,
+                ImmutableMap.of(),
+                false,
+                false));
+
+        MaterializedViewDefinition materializedViewNonExistentTable = new MaterializedViewDefinition(
+                "SELECT a, b FROM non_existent_table",
+                Optional.of(TPCH_CATALOG),
+                Optional.of("s1"),
+                ImmutableList.of(new ViewColumn("a", BIGINT.getTypeId(), Optional.empty()), new ViewColumn("b", BIGINT.getTypeId(), Optional.empty())),
+                Optional.of(STALE_MV_STALENESS.minusHours(1)), // Minus 1 hour to make MVs not marked as fresh become stale immediately. This doesn’t affect those marked as fresh.
+                whenStaleBehavior,
+                Optional.empty(),
+                Identity.ofUser("some user"),
+                ImmutableList.of(),
+                // t3 has a, b column and hidden column x
+                Optional.of(new CatalogSchemaTableName(TPCH_CATALOG, "s1", "t3")));
+
+        QualifiedObjectName freshMaterializedViewNonExistentTable = new QualifiedObjectName(TPCH_CATALOG, "s1", "fresh_materialized_view_non_existent_table" + suffix);
+        inSetupTransaction(session -> metadata.createMaterializedView(
+                session,
+                freshMaterializedViewNonExistentTable,
+                materializedViewNonExistentTable,
+                ImmutableMap.of(),
+                false,
+                false));
+        testingConnectorMetadata.markMaterializedViewIsFresh(freshMaterializedViewNonExistentTable.asSchemaTableName());
+
+        QualifiedObjectName staleMaterializedViewNonExistentTable = new QualifiedObjectName(TPCH_CATALOG, "s1", "stale_materialized_view_non_existent_table" + suffix);
+        inSetupTransaction(session -> metadata.createMaterializedView(
+                session,
+                staleMaterializedViewNonExistentTable,
+                materializedViewNonExistentTable,
+                ImmutableMap.of(),
+                false,
+                false));
+
+        QualifiedObjectName freshMaterializedViewMismatchedColumnCount = new QualifiedObjectName(TPCH_CATALOG, "s1", "fresh_materialized_view_mismatched_column_count" + suffix);
         inSetupTransaction(session -> metadata.createMaterializedView(
                 session,
                 freshMaterializedViewMismatchedColumnCount,
@@ -7725,6 +8242,7 @@ public class TestAnalyzer
                         Optional.of("s1"),
                         ImmutableList.of(new ViewColumn("a", BIGINT.getTypeId(), Optional.empty())),
                         Optional.empty(),
+                        whenStaleBehavior,
                         Optional.empty(),
                         Identity.ofUser("some user"),
                         ImmutableList.of(),
@@ -7734,7 +8252,7 @@ public class TestAnalyzer
                 false));
         testingConnectorMetadata.markMaterializedViewIsFresh(freshMaterializedViewMismatchedColumnCount.asSchemaTableName());
 
-        QualifiedObjectName freshMaterializedMismatchedColumnName = new QualifiedObjectName(TPCH_CATALOG, "s1", "fresh_materialized_view_mismatched_column_name");
+        QualifiedObjectName freshMaterializedMismatchedColumnName = new QualifiedObjectName(TPCH_CATALOG, "s1", "fresh_materialized_view_mismatched_column_name" + suffix);
         inSetupTransaction(session -> metadata.createMaterializedView(
                 session,
                 freshMaterializedMismatchedColumnName,
@@ -7744,6 +8262,7 @@ public class TestAnalyzer
                         Optional.of("s1"),
                         ImmutableList.of(new ViewColumn("a", BIGINT.getTypeId(), Optional.empty()), new ViewColumn("c", BIGINT.getTypeId(), Optional.empty())),
                         Optional.empty(),
+                        whenStaleBehavior,
                         Optional.empty(),
                         Identity.ofUser("some user"),
                         ImmutableList.of(),
@@ -7753,7 +8272,7 @@ public class TestAnalyzer
                 false));
         testingConnectorMetadata.markMaterializedViewIsFresh(freshMaterializedMismatchedColumnName.asSchemaTableName());
 
-        QualifiedObjectName freshMaterializedMismatchedColumnType = new QualifiedObjectName(TPCH_CATALOG, "s1", "fresh_materialized_view_mismatched_column_type");
+        QualifiedObjectName freshMaterializedMismatchedColumnType = new QualifiedObjectName(TPCH_CATALOG, "s1", "fresh_materialized_view_mismatched_column_type" + suffix);
         inSetupTransaction(session -> metadata.createMaterializedView(
                 session,
                 freshMaterializedMismatchedColumnType,
@@ -7763,6 +8282,7 @@ public class TestAnalyzer
                         Optional.of("s1"),
                         ImmutableList.of(new ViewColumn("a", BIGINT.getTypeId(), Optional.empty()), new ViewColumn("b", RowType.anonymousRow(TINYINT).getTypeId(), Optional.empty())),
                         Optional.empty(),
+                        whenStaleBehavior,
                         Optional.empty(),
                         Identity.ofUser("some user"),
                         ImmutableList.of(),
@@ -7771,6 +8291,11 @@ public class TestAnalyzer
                 false,
                 false));
         testingConnectorMetadata.markMaterializedViewIsFresh(freshMaterializedMismatchedColumnType.asSchemaTableName());
+    }
+
+    private static String resolveMaterializedViewNameSuffix(WhenStaleBehavior whenStaleBehavior)
+    {
+        return "_when_stale_" + whenStaleBehavior.name().toLowerCase(Locale.ENGLISH);
     }
 
     @Test
@@ -7826,7 +8351,6 @@ public class TestAnalyzer
         StatementAnalyzerFactory statementAnalyzerFactory = new StatementAnalyzerFactory(
                 plannerContext,
                 new SqlParser(),
-                SessionTimeProvider.DEFAULT,
                 accessControl,
                 new NoOpTransactionManager()
                 {
@@ -7928,5 +8452,8 @@ public class TestAnalyzer
                     stringProperty("p1", "test string property", "", false),
                     integerProperty("p2", "test integer property", 0, false));
         }
+
+        @Override
+        public void shutdown() {}
     }
 }

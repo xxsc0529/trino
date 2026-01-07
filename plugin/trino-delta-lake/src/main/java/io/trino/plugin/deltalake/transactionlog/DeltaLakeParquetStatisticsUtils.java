@@ -153,7 +153,7 @@ public final class DeltaLakeParquetStatisticsUtils
         }
         if (type instanceof RowType rowType) {
             Map<?, ?> values = (Map<?, ?>) jsonValue;
-            List<Type> fieldTypes = rowType.getTypeParameters();
+            List<Type> fieldTypes = rowType.getFieldTypes();
             return buildRowValue(rowType, fields -> {
                 for (int i = 0; i < values.size(); ++i) {
                     Type fieldType = fieldTypes.get(i);
@@ -252,7 +252,7 @@ public final class DeltaLakeParquetStatisticsUtils
     private static Map<String, Object> jsonEncode(Map<String, Optional<Statistics<?>>> stats, Map<String, Type> typeForColumn, BiFunction<Type, Statistics<?>, Optional<Object>> accessor)
     {
         Map<String, Optional<Object>> allStats = stats.entrySet().stream()
-                .filter(entry -> entry.getValue() != null && entry.getValue().isPresent() && !entry.getValue().get().isEmpty())
+                .filter(entry -> entry.getValue() != null && entry.getValue().isPresent() && !entry.getValue().get().isEmpty() && typeForColumn.containsKey(entry.getKey()))
                 .collect(toImmutableMap(Map.Entry::getKey, entry -> accessor.apply(typeForColumn.get(entry.getKey()), entry.getValue().get())));
 
         return allStats.entrySet().stream()

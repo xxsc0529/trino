@@ -41,6 +41,7 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.getFirst;
 import static com.google.common.collect.Iterables.getLast;
 import static io.airlift.units.DataSize.succinctBytes;
+import static io.airlift.units.Duration.succinctDuration;
 import static java.lang.Math.max;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -343,8 +344,6 @@ public class DriverContext
         DataSize internalNetworkInputDataSize;
         long internalNetworkInputPositions;
 
-        DataSize rawInputDataSize;
-        long rawInputPositions;
         Duration rawInputReadTime;
 
         DataSize processedInputDataSize;
@@ -361,8 +360,6 @@ public class DriverContext
             internalNetworkInputDataSize = inputOperator.getInternalNetworkInputDataSize();
             internalNetworkInputPositions = inputOperator.getInternalNetworkInputPositions();
 
-            rawInputDataSize = inputOperator.getRawInputDataSize();
-            rawInputPositions = inputOperator.getInputPositions();
             rawInputReadTime = inputOperator.getAddInputWall();
 
             processedInputDataSize = inputOperator.getInputDataSize();
@@ -379,24 +376,22 @@ public class DriverContext
         else {
             physicalInputDataSize = DataSize.ofBytes(0);
             physicalInputPositions = 0;
-            physicalInputReadTime = new Duration(0, MILLISECONDS);
+            physicalInputReadTime = succinctDuration(0, MILLISECONDS);
 
             internalNetworkInputDataSize = DataSize.ofBytes(0);
             internalNetworkInputPositions = 0;
 
-            rawInputDataSize = DataSize.ofBytes(0);
-            rawInputPositions = 0;
-            rawInputReadTime = new Duration(0, MILLISECONDS);
+            rawInputReadTime = succinctDuration(0, MILLISECONDS);
 
             processedInputDataSize = DataSize.ofBytes(0);
             processedInputPositions = 0;
 
-            inputBlockedTime = new Duration(0, MILLISECONDS);
+            inputBlockedTime = succinctDuration(0, MILLISECONDS);
 
             outputDataSize = DataSize.ofBytes(0);
             outputPositions = 0;
 
-            outputBlockedTime = new Duration(0, MILLISECONDS);
+            outputBlockedTime = succinctDuration(0, MILLISECONDS);
         }
 
         ImmutableSet.Builder<BlockedReason> builder = ImmutableSet.builder();
@@ -429,8 +424,6 @@ public class DriverContext
                 physicalInputReadTime,
                 internalNetworkInputDataSize.succinct(),
                 internalNetworkInputPositions,
-                rawInputDataSize.succinct(),
-                rawInputPositions,
                 rawInputReadTime,
                 processedInputDataSize.succinct(),
                 processedInputPositions,

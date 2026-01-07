@@ -71,7 +71,7 @@ public class TestQueryStateInfo
         QueryStateInfo query = createQueuedQueryStateInfo(
                 new BasicQueryInfo(createQueryInfo("query_root_a_x", QUEUED, "SELECT 1")),
                 Optional.of(rootAX.getId()),
-                Optional.of(ImmutableList.of(rootAX.getInfo(), rootA.getInfo(), root.getInfo())));
+                Optional.of(ImmutableList.of(rootAX.getFullInfo(), rootA.getFullInfo(), root.getFullInfo())));
 
         assertThat(query.getQuery()).isEqualTo("SELECT 1");
         assertThat(query.getQueryId().toString()).isEqualTo("query_root_a_x");
@@ -83,14 +83,14 @@ public class TestQueryStateInfo
         assertThat(chainInfo).hasSize(3);
 
         ResourceGroupInfo rootAInfo = chainInfo.get(1);
-        ResourceGroupInfo expectedRootAInfo = rootA.getInfo();
+        ResourceGroupInfo expectedRootAInfo = rootA.getFullInfo();
         assertThat(rootAInfo.id()).isEqualTo(expectedRootAInfo.id());
         assertThat(rootAInfo.state()).isEqualTo(expectedRootAInfo.state());
         assertThat(rootAInfo.numRunningQueries()).isEqualTo(expectedRootAInfo.numRunningQueries());
         assertThat(rootAInfo.numQueuedQueries()).isEqualTo(expectedRootAInfo.numQueuedQueries());
 
         ResourceGroupInfo actualRootInfo = chainInfo.get(2);
-        ResourceGroupInfo expectedRootInfo = root.getInfo();
+        ResourceGroupInfo expectedRootInfo = root.getFullInfo();
         assertThat(actualRootInfo.id()).isEqualTo(expectedRootInfo.id());
         assertThat(actualRootInfo.state()).isEqualTo(expectedRootInfo.state());
         assertThat(actualRootInfo.numRunningQueries()).isEqualTo(expectedRootInfo.numRunningQueries());
@@ -163,10 +163,6 @@ public class TestQueryStateInfo
                         DataSize.valueOf("274GB"),
                         283,
                         284,
-                        DataSize.valueOf("28GB"),
-                        DataSize.valueOf("29GB"),
-                        30,
-                        31,
                         DataSize.valueOf("32GB"),
                         DataSize.valueOf("33GB"),
                         34,
@@ -183,6 +179,7 @@ public class TestQueryStateInfo
                         DataSize.valueOf("41GB"),
                         ImmutableList.of(),
                         DynamicFiltersStats.EMPTY,
+                        ImmutableMap.of(),
                         ImmutableList.of(),
                         ImmutableList.of()),
                 Optional.empty(),
@@ -204,6 +201,7 @@ public class TestQueryStateInfo
                 null,
                 ImmutableList.of(),
                 ImmutableSet.of(),
+                Optional.empty(),
                 Optional.empty(),
                 ImmutableList.of(),
                 ImmutableList.of(),

@@ -16,6 +16,7 @@ package io.trino.plugin.deltalake;
 import com.google.inject.Module;
 import io.trino.filesystem.TrinoFileSystemFactory;
 import io.trino.filesystem.local.LocalFileSystemFactory;
+import io.trino.plugin.deltalake.metastore.NoOpVendedCredentialsProvider;
 import io.trino.plugin.deltalake.transactionlog.writer.LocalTransactionLogSynchronizer;
 import io.trino.plugin.deltalake.transactionlog.writer.TransactionLogSynchronizer;
 import io.trino.plugin.hive.metastore.file.FileHiveMetastoreConfig;
@@ -27,6 +28,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 import static com.google.inject.multibindings.MapBinder.newMapBinder;
 import static io.airlift.configuration.ConfigBinder.configBinder;
@@ -37,14 +39,14 @@ public class TestingDeltaLakePlugin
         extends DeltaLakePlugin
 {
     private final Path localFileSystemRootPath;
-    private final Optional<Module> metastoreModule;
+    private final Supplier<Optional<Module>> metastoreModule;
 
     public TestingDeltaLakePlugin(Path localFileSystemRootPath)
     {
-        this(localFileSystemRootPath, Optional.empty());
+        this(localFileSystemRootPath, Optional::empty);
     }
 
-    public TestingDeltaLakePlugin(Path localFileSystemRootPath, Optional<Module> metastoreModule)
+    public TestingDeltaLakePlugin(Path localFileSystemRootPath, Supplier<Optional<Module>> metastoreModule)
     {
         this.localFileSystemRootPath = requireNonNull(localFileSystemRootPath, "localFileSystemRootPath is null");
         this.metastoreModule = requireNonNull(metastoreModule, "metastoreModule is null");
@@ -69,15 +71,17 @@ public class TestingDeltaLakePlugin
                         catalogName,
                         config,
                         context,
-                        metastoreModule,
+                        metastoreModule.get(),
                         binder -> {
                             binder.install(new TestingDeltaLakeExtensionsModule());
                             LocalFileSystemFactory localFileSystemFactory = new LocalFileSystemFactory(localFileSystemRootPath);
                             newMapBinder(binder, String.class, TrinoFileSystemFactory.class)
                                     .addBinding("local").toInstance(localFileSystemFactory);
                             newMapBinder(binder, String.class, TransactionLogSynchronizer.class)
-                                    .addBinding("local").toInstance(new LocalTransactionLogSynchronizer(localFileSystemFactory));
-                            configBinder(binder).bindConfigDefaults(FileHiveMetastoreConfig.class, defaults -> defaults.setCatalogDirectory("local:///"));
+                                    .addBinding("local").toInstance(new LocalTransactionLogSynchronizer(new DefaultDeltaLakeFileSystemFactory(localFileSystemFactory, new NoOpVendedCredentialsProvider())));
+                            configBinder(binder).bindConfigDefaults(
+                                    FileHiveMetastoreConfig.class,
+                                    metastoreConfig -> metastoreConfig.setCatalogDirectory("local:///" + catalogName));
                         });
             }
         });

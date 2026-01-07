@@ -20,6 +20,8 @@ import io.airlift.units.DataSize.Unit;
 import io.airlift.units.Duration;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
@@ -73,7 +75,6 @@ public class TestHiveConfig
                 .setSortedWritingEnabled(true)
                 .setPropagateTableScanSortingProperties(false)
                 .setMaxPartitionsPerWriter(100)
-                .setWriteValidationThreads(16)
                 .setValidateBucketing(true)
                 .setParallelPartitionedBucketedWrites(true)
                 .setTextMaxLineLength(DataSize.of(100, Unit.MEGABYTE))
@@ -119,11 +120,15 @@ public class TestHiveConfig
                 .setAutoPurge(false)
                 .setPartitionProjectionEnabled(true)
                 .setS3GlacierFilter(S3GlacierFilter.READ_ALL)
-                .setMetadataParallelism(8));
+                .setMetadataParallelism(8)
+                .setProtobufDescriptorsLocation(null)
+                .setProtobufDescriptorsCacheRefreshInterval(new Duration(1, TimeUnit.DAYS))
+                .setProtobufDescriptorsCacheMaxSize(64));
     }
 
     @Test
     public void testExplicitPropertyMappings()
+            throws IOException
     {
         Map<String, String> properties = ImmutableMap.<String, String>builder()
                 .put("hive.single-statement-writes", "true")
@@ -153,7 +158,6 @@ public class TestHiveConfig
                 .put("hive.create-empty-bucket-files", "true")
                 .put("hive.delete-schema-locations-fallback", "true")
                 .put("hive.max-partitions-per-writers", "222")
-                .put("hive.write-validation-threads", "11")
                 .put("hive.validate-bucketing", "false")
                 .put("hive.parallel-partitioned-bucketed-writes", "false")
                 .put("hive.force-local-scheduling", "true")
@@ -207,6 +211,9 @@ public class TestHiveConfig
                 .put("hive.partition-projection-enabled", "false")
                 .put("hive.s3-glacier-filter", "READ_NON_GLACIER_AND_RESTORED")
                 .put("hive.metadata.parallelism", "10")
+                .put("hive.protobuf.descriptors.location", "/tmp")
+                .put("hive.protobuf.descriptors.cache.max-size", "8")
+                .put("hive.protobuf.descriptors.cache.refresh-interval", "10s")
                 .buildOrThrow();
 
         HiveConfig expected = new HiveConfig()
@@ -242,7 +249,6 @@ public class TestHiveConfig
                 .setCreateEmptyBucketFiles(true)
                 .setDeleteSchemaLocationsFallback(true)
                 .setMaxPartitionsPerWriter(222)
-                .setWriteValidationThreads(11)
                 .setValidateBucketing(false)
                 .setParallelPartitionedBucketedWrites(false)
                 .setTextMaxLineLength(DataSize.of(13, Unit.MEGABYTE))
@@ -290,7 +296,10 @@ public class TestHiveConfig
                 .setAutoPurge(true)
                 .setPartitionProjectionEnabled(false)
                 .setS3GlacierFilter(S3GlacierFilter.READ_NON_GLACIER_AND_RESTORED)
-                .setMetadataParallelism(10);
+                .setMetadataParallelism(10)
+                .setProtobufDescriptorsLocation(Path.of("/tmp"))
+                .setProtobufDescriptorsCacheMaxSize(8)
+                .setProtobufDescriptorsCacheRefreshInterval(new Duration(10, TimeUnit.SECONDS));
 
         assertFullMapping(properties, expected);
     }

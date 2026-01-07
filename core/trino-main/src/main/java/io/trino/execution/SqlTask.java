@@ -28,6 +28,7 @@ import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.trino.Session;
+import io.trino.connector.CatalogHandle;
 import io.trino.exchange.ExchangeManagerRegistry;
 import io.trino.execution.DynamicFiltersCollector.VersionedDynamicFilterDomains;
 import io.trino.execution.StateMachine.StateChangeListener;
@@ -41,7 +42,6 @@ import io.trino.operator.PipelineContext;
 import io.trino.operator.PipelineStatus;
 import io.trino.operator.TaskContext;
 import io.trino.operator.TaskStats;
-import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.predicate.Domain;
 import io.trino.sql.planner.PlanFragment;
 import io.trino.sql.planner.plan.DynamicFilterId;
@@ -54,6 +54,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executor;
@@ -69,6 +70,7 @@ import static com.google.common.base.Verify.verify;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static io.airlift.units.DataSize.succinctBytes;
+import static io.airlift.units.Duration.succinctDuration;
 import static io.trino.execution.DynamicFiltersCollector.INITIAL_DYNAMIC_FILTERS_VERSION;
 import static io.trino.execution.DynamicFiltersCollector.INITIAL_DYNAMIC_FILTER_DOMAINS;
 import static io.trino.execution.TaskState.FAILED;
@@ -252,6 +254,12 @@ public class SqlTask
         return taskStateMachine.getCreatedTime();
     }
 
+    @Nullable
+    public Instant getTaskEndTime()
+    {
+        return taskStateMachine.getEndTime();
+    }
+
     public TaskId getTaskId()
     {
         return taskStateMachine.getTaskId();
@@ -265,6 +273,11 @@ public class SqlTask
     public void recordHeartbeat()
     {
         lastHeartbeat.set(Instant.now());
+    }
+
+    public Instant lastHeartbeat()
+    {
+        return lastHeartbeat.get();
     }
 
     public TaskInfo getTaskInfo()
@@ -333,12 +346,12 @@ public class SqlTask
         DataSize outputDataSize = DataSize.ofBytes(0);
         DataSize writerInputDataSize = DataSize.ofBytes(0);
         DataSize physicalWrittenDataSize = DataSize.ofBytes(0);
-        Optional<Integer> writerCount = Optional.empty();
+        OptionalInt writerCount = OptionalInt.empty();
         DataSize userMemoryReservation = DataSize.ofBytes(0);
         DataSize peakUserMemoryReservation = DataSize.ofBytes(0);
         DataSize revocableMemoryReservation = DataSize.ofBytes(0);
         long fullGcCount = 0;
-        Duration fullGcTime = new Duration(0, MILLISECONDS);
+        Duration fullGcTime = succinctDuration(0, MILLISECONDS);
         long dynamicFiltersVersion = INITIAL_DYNAMIC_FILTERS_VERSION;
         if (taskHolder.getFinalTaskInfo() != null) {
             TaskInfo taskInfo = taskHolder.getFinalTaskInfo();
@@ -363,10 +376,10 @@ public class SqlTask
             TaskContext taskContext = taskHolder.getTaskExecution().getTaskContext();
             for (PipelineContext pipelineContext : taskContext.getPipelineContexts()) {
                 PipelineStatus pipelineStatus = pipelineContext.getPipelineStatus();
-                queuedPartitionedDrivers += pipelineStatus.getQueuedPartitionedDrivers();
-                queuedPartitionedSplitsWeight += pipelineStatus.getQueuedPartitionedSplitsWeight();
-                runningPartitionedDrivers += pipelineStatus.getRunningPartitionedDrivers();
-                runningPartitionedSplitsWeight += pipelineStatus.getRunningPartitionedSplitsWeight();
+                queuedPartitionedDrivers += pipelineStatus.queuedPartitionedDrivers();
+                queuedPartitionedSplitsWeight += pipelineStatus.queuedPartitionedSplitsWeight();
+                runningPartitionedDrivers += pipelineStatus.runningPartitionedDrivers();
+                runningPartitionedSplitsWeight += pipelineStatus.runningPartitionedSplitsWeight();
                 physicalWrittenBytes += pipelineContext.getPhysicalWrittenDataSize();
             }
             writerInputDataSize = succinctBytes(taskContext.getWriterInputDataSize());
@@ -555,8 +568,8 @@ public class SqlTask
 
             taskSpan.set(tracer.spanBuilder("task")
                     .setParent(Context.current().with(stageSpan))
-                    .setAttribute(TrinoAttributes.QUERY_ID, taskId.getQueryId().toString())
-                    .setAttribute(TrinoAttributes.STAGE_ID, taskId.getStageId().toString())
+                    .setAttribute(TrinoAttributes.QUERY_ID, taskId.queryId().toString())
+                    .setAttribute(TrinoAttributes.STAGE_ID, taskId.stageId().toString())
                     .setAttribute(TrinoAttributes.TASK_ID, taskId.toString())
                     .startSpan());
 

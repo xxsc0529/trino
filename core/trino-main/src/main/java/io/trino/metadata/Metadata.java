@@ -17,18 +17,20 @@ import com.google.common.collect.Multimap;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.slice.Slice;
 import io.trino.Session;
+import io.trino.connector.CatalogHandle;
 import io.trino.spi.RefreshType;
 import io.trino.spi.TrinoException;
+import io.trino.spi.catalog.CatalogName;
 import io.trino.spi.connector.AggregateFunction;
 import io.trino.spi.connector.AggregationApplicationResult;
 import io.trino.spi.connector.BeginTableExecuteResult;
-import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.CatalogSchemaName;
 import io.trino.spi.connector.CatalogSchemaTableName;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ColumnMetadata;
 import io.trino.spi.connector.ColumnPosition;
 import io.trino.spi.connector.ConnectorCapabilities;
+import io.trino.spi.connector.ConnectorName;
 import io.trino.spi.connector.ConnectorOutputMetadata;
 import io.trino.spi.connector.ConnectorTableMetadata;
 import io.trino.spi.connector.Constraint;
@@ -65,6 +67,7 @@ import io.trino.spi.function.FunctionId;
 import io.trino.spi.function.FunctionMetadata;
 import io.trino.spi.function.LanguageFunction;
 import io.trino.spi.function.OperatorType;
+import io.trino.spi.metrics.Metrics;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.security.FunctionAuthorization;
 import io.trino.spi.security.GrantInfo;
@@ -121,7 +124,7 @@ public interface Metadata
 
     void finishTableExecute(Session session, TableExecuteHandle handle, Collection<Slice> fragments, List<Object> tableExecuteState);
 
-    void executeTableExecute(Session session, TableExecuteHandle handle);
+    Map<String, Long> executeTableExecute(Session session, TableExecuteHandle handle);
 
     TableProperties getTableProperties(Session session, TableHandle handle);
 
@@ -144,6 +147,11 @@ public interface Metadata
     Optional<PartitioningHandle> getCommonPartitioning(Session session, PartitioningHandle left, PartitioningHandle right);
 
     Optional<Object> getInfo(Session session, TableHandle handle);
+
+    /**
+     * Return connector-specific, metadata operations metrics for the given session.
+     */
+    Metrics getMetrics(Session session, String catalogName);
 
     CatalogSchemaTableName getTableName(Session session, TableHandle tableHandle);
 
@@ -207,6 +215,16 @@ public interface Metadata
      * TODO: consider returning a stream for more efficient processing
      */
     List<RelationCommentMetadata> listRelationComments(Session session, String catalogName, Optional<String> schemaName, UnaryOperator<Set<SchemaTableName>> relationFilter);
+
+    /**
+     * Creates a catalog.
+     */
+    void createCatalog(Session session, CatalogName catalog, ConnectorName connectorName, Map<String, String> properties, boolean notExists);
+
+    /**
+     * Drops the specified catalog.
+     */
+    void dropCatalog(Session session, CatalogName catalog, boolean cascade);
 
     /**
      * Creates a schema.
@@ -283,6 +301,16 @@ public interface Metadata
     void addField(Session session, TableHandle tableHandle, List<String> parentPath, String fieldName, Type type, boolean ignoreExisting);
 
     /**
+     * Set the specified default value to the column.
+     */
+    void setDefaultValue(Session session, TableHandle tableHandle, ColumnHandle column, String defaultValue);
+
+    /**
+     * Drop a default value on the specified column.
+     */
+    void dropDefaultValue(Session session, TableHandle tableHandle, ColumnHandle column);
+
+    /**
      * Set the specified type to the column.
      */
     void setColumnType(Session session, TableHandle tableHandle, ColumnHandle column, Type type);
@@ -341,7 +369,7 @@ public interface Metadata
     /**
      * Describes statistics that must be collected during a write.
      */
-    TableStatisticsMetadata getStatisticsCollectionMetadataForWrite(Session session, CatalogHandle catalogHandle, ConnectorTableMetadata tableMetadata);
+    TableStatisticsMetadata getStatisticsCollectionMetadataForWrite(Session session, CatalogHandle catalogHandle, ConnectorTableMetadata tableMetadata, boolean tableReplace);
 
     /**
      * Describe statistics that must be collected during a statistics collection
@@ -467,9 +495,11 @@ public interface Metadata
     Optional<CatalogHandle> getCatalogHandle(Session session, String catalogName);
 
     /**
-     * Gets all the loaded catalogs
+     * Gets all the catalogs
      */
     List<CatalogInfo> listCatalogs(Session session);
+
+    List<CatalogInfo> listActiveCatalogs(Session session);
 
     /**
      * Get the names that match the specified table prefix (never null).
@@ -512,6 +542,11 @@ public interface Metadata
      * Rename the specified view.
      */
     void renameView(Session session, QualifiedObjectName existingViewName, QualifiedObjectName newViewName);
+
+    /**
+     * Refreshes the view definition.
+     */
+    void refreshView(Session session, QualifiedObjectName viewName, ViewDefinition definition);
 
     /**
      * Drops the specified view.
@@ -675,6 +710,21 @@ public interface Metadata
     List<GrantInfo> listTablePrivileges(Session session, QualifiedTablePrefix prefix);
 
     /**
+     * Grants the specified privilege to the specified user on the specified branch
+     */
+    void grantTableBranchPrivileges(Session session, QualifiedObjectName tableName, String branchName, Set<Privilege> privileges, TrinoPrincipal grantee, boolean grantOption);
+
+    /**
+     * Denies the specified privilege to the specified principal on the specified branch
+     */
+    void denyTableBranchPrivileges(Session session, QualifiedObjectName tableName, String branchName, Set<Privilege> privileges, TrinoPrincipal grantee);
+
+    /**
+     * Revokes the specified privilege on the specified branch from the specified user.
+     */
+    void revokeTableBranchPrivileges(Session session, QualifiedObjectName tableName, String branchName, Set<Privilege> privileges, TrinoPrincipal grantee, boolean grantOption);
+
+    /**
      * Gets all the EntityPrivileges associated with an entityKind.  Defines ALL PRIVILEGES
      * for the entityKind
      */
@@ -746,7 +796,7 @@ public interface Metadata
 
     void dropLanguageFunction(Session session, QualifiedObjectName name, String signatureToken);
 
-    void createBranch(Session session, TableHandle tableHandle, String branch, SaveMode saveMode, Map<String, Object> properties);
+    void createBranch(Session session, TableHandle tableHandle, String branch, Optional<String> fromBranch, SaveMode saveMode, Map<String, Object> properties);
 
     void dropBranch(Session session, TableHandle tableHandle, String branch);
 
@@ -801,7 +851,7 @@ public interface Metadata
      * Method to get difference between the states of table at two different points in time/or as of given token-ids.
      * The method is used by the engine to determine if a materialized view is current with respect to the tables it depends on.
      */
-    MaterializedViewFreshness getMaterializedViewFreshness(Session session, QualifiedObjectName name);
+    MaterializedViewFreshness getMaterializedViewFreshness(Session session, QualifiedObjectName name, boolean considerGracePeriod);
 
     /**
      * Rename the specified materialized view.

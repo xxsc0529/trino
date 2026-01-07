@@ -22,6 +22,7 @@ import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Maps;
 import io.airlift.slice.Slice;
 import io.trino.Session;
+import io.trino.connector.CatalogHandle;
 import io.trino.cost.PlanNodeStatsEstimate;
 import io.trino.metadata.FunctionResolver;
 import io.trino.metadata.IndexHandle;
@@ -32,7 +33,6 @@ import io.trino.metadata.TableFunctionHandle;
 import io.trino.metadata.TableHandle;
 import io.trino.operator.RetryPolicy;
 import io.trino.security.AllowAllAccessControl;
-import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.SortOrder;
@@ -918,8 +918,8 @@ public class PlanBuilder
                     ImmutableList.copyOf(outputSymbols),
                     false,
                     Optional.empty(),
-                    Optional.empty(),
-                    Optional.of(partitionCount)));
+                    OptionalInt.empty(),
+                    OptionalInt.of(partitionCount)));
         }
 
         public ExchangeBuilder fixedArbitraryDistributionPartitioningScheme(List<Symbol> outputSymbols, int partitionCount)
@@ -930,8 +930,8 @@ public class PlanBuilder
                     ImmutableList.copyOf(outputSymbols),
                     false,
                     Optional.empty(),
-                    Optional.empty(),
-                    Optional.of(partitionCount)));
+                    OptionalInt.empty(),
+                    OptionalInt.of(partitionCount)));
         }
 
         public ExchangeBuilder partitioningScheme(PartitioningScheme partitioningScheme)

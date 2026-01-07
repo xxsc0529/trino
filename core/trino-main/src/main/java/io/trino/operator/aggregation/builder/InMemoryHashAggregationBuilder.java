@@ -228,15 +228,17 @@ public class InMemoryHashAggregationBuilder
     @Override
     public WorkProcessor<Page> buildResult()
     {
+        groupByHash.startReleasingOutput();
         for (GroupedAggregator groupedAggregator : groupedAggregators) {
             groupedAggregator.prepareFinal();
         }
-        // Only incrementally release memory for final aggregations, since partial aggregations have a fixed
-        // memory limit and can be expected to fully flush and release their output quickly
+        // Always update the current memory usage after calling GroupedAggregator#prepareFinal(), since it can increase
+        // memory consumption significantly in some situations. This also captures any memory usage reduction the
+        // groupByHash may have initiated for releasing output
+        updateMemory();
+        // Only incrementally release memory while producing output for final aggregations, since partial aggregations
+        // have a fixed memory limit and can be expected to fully flush and release their output quickly
         boolean releaseMemoryOnOutput = !partial;
-        if (releaseMemoryOnOutput) {
-            groupByHash.startReleasingOutput();
-        }
         return buildResult(consecutiveGroupIds(), new PageBuilder(buildTypes()), false, releaseMemoryOnOutput);
     }
 
@@ -347,7 +349,7 @@ public class InMemoryHashAggregationBuilder
         ImmutableList.Builder<Type> types = ImmutableList.builderWithExpectedSize(groupByType.size() + factories.size());
         types.addAll(groupByType);
         for (AggregatorFactory factory : factories) {
-            types.add(factory.createAggregator(new AggregationMetrics()).getType());
+            types.add(factory.getOutputType());
         }
         return types.build();
     }

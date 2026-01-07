@@ -20,13 +20,14 @@ import com.google.errorprone.annotations.concurrent.GuardedBy;
 import com.google.inject.Inject;
 import io.airlift.units.Duration;
 import io.trino.cache.EvictableCacheBuilder;
-import io.trino.plugin.hive.NodeVersion;
 import io.trino.plugin.iceberg.IcebergConfig;
 import io.trino.plugin.iceberg.IcebergFileSystemFactory;
 import io.trino.plugin.iceberg.catalog.TrinoCatalog;
 import io.trino.plugin.iceberg.catalog.TrinoCatalogFactory;
+import io.trino.plugin.iceberg.catalog.rest.IcebergRestCatalogConfig.Security;
 import io.trino.plugin.iceberg.catalog.rest.IcebergRestCatalogConfig.SessionType;
-import io.trino.plugin.iceberg.fileio.ForwardingFileIo;
+import io.trino.plugin.iceberg.fileio.ForwardingFileIoFactory;
+import io.trino.spi.NodeVersion;
 import io.trino.spi.catalog.CatalogName;
 import io.trino.spi.security.ConnectorIdentity;
 import io.trino.spi.type.TypeManager;
@@ -52,18 +53,19 @@ public class TrinoIcebergRestCatalogFactory
         implements TrinoCatalogFactory
 {
     private final IcebergFileSystemFactory fileSystemFactory;
+    private final ForwardingFileIoFactory fileIoFactory;
     private final CatalogName catalogName;
     private final String trinoVersion;
     private final URI serverUri;
     private final Optional<String> prefix;
     private final Optional<String> warehouse;
     private final boolean nestedNamespaceEnabled;
+    private final Security security;
     private final SessionType sessionType;
     private final Duration sessionTimeout;
     private final boolean vendedCredentialsEnabled;
     private final boolean viewEndpointsEnabled;
     private final SecurityProperties securityProperties;
-    private final AwsProperties awsProperties;
     private final boolean uniqueTableLocation;
     private final TypeManager typeManager;
     private final boolean caseInsensitiveNameMatching;
@@ -76,15 +78,16 @@ public class TrinoIcebergRestCatalogFactory
     @Inject
     public TrinoIcebergRestCatalogFactory(
             IcebergFileSystemFactory fileSystemFactory,
+            ForwardingFileIoFactory fileIoFactory,
             CatalogName catalogName,
             IcebergRestCatalogConfig restConfig,
             SecurityProperties securityProperties,
-            AwsProperties awsProperties,
             IcebergConfig icebergConfig,
             TypeManager typeManager,
             NodeVersion nodeVersion)
     {
         this.fileSystemFactory = requireNonNull(fileSystemFactory, "fileSystemFactory is null");
+        this.fileIoFactory = requireNonNull(fileIoFactory, "fileIoFactory is null");
         this.catalogName = requireNonNull(catalogName, "catalogName is null");
         this.trinoVersion = requireNonNull(nodeVersion, "nodeVersion is null").toString();
         requireNonNull(restConfig, "restConfig is null");
@@ -92,12 +95,12 @@ public class TrinoIcebergRestCatalogFactory
         this.prefix = restConfig.getPrefix();
         this.warehouse = restConfig.getWarehouse();
         this.nestedNamespaceEnabled = restConfig.isNestedNamespaceEnabled();
+        this.security = restConfig.getSecurity();
         this.sessionType = restConfig.getSessionType();
         this.sessionTimeout = restConfig.getSessionTimeout();
         this.vendedCredentialsEnabled = restConfig.isVendedCredentialsEnabled();
         this.viewEndpointsEnabled = restConfig.isViewEndpointsEnabled();
         this.securityProperties = requireNonNull(securityProperties, "securityProperties is null");
-        this.awsProperties = requireNonNull(awsProperties, "awsProperties is null");
         requireNonNull(icebergConfig, "icebergConfig is null");
         this.uniqueTableLocation = icebergConfig.isUniqueTableLocation();
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
@@ -126,7 +129,6 @@ public class TrinoIcebergRestCatalogFactory
             properties.put("trino-version", trinoVersion);
             properties.put(AUTH_SESSION_TIMEOUT_MS, String.valueOf(sessionTimeout.toMillis()));
             properties.putAll(securityProperties.get());
-            properties.putAll(awsProperties.get());
 
             if (vendedCredentialsEnabled) {
                 properties.put("header.X-Iceberg-Access-Delegation", "vended-credentials");
@@ -141,7 +143,7 @@ public class TrinoIcebergRestCatalogFactory
                         ConnectorIdentity currentIdentity = (context.wrappedIdentity() != null)
                                 ? ((ConnectorIdentity) context.wrappedIdentity())
                                 : ConnectorIdentity.ofUser("fake");
-                        return new ForwardingFileIo(fileSystemFactory.create(currentIdentity, config), config, true);
+                        return fileIoFactory.create(fileSystemFactory.create(currentIdentity, config), true, config);
                     });
             icebergCatalogInstance.initialize(catalogName.toString(), properties.buildOrThrow());
 
@@ -153,8 +155,10 @@ public class TrinoIcebergRestCatalogFactory
         Map<String, String> credentials = Maps.filterKeys(securityProperties.get(), key -> Set.of(TOKEN, CREDENTIAL).contains(key));
 
         return new TrinoRestCatalog(
+                fileSystemFactory,
                 icebergCatalog,
                 catalogName,
+                security,
                 sessionType,
                 credentials,
                 nestedNamespaceEnabled,
@@ -163,6 +167,7 @@ public class TrinoIcebergRestCatalogFactory
                 uniqueTableLocation,
                 caseInsensitiveNameMatching,
                 remoteNamespaceMappingCache,
-                remoteTableMappingCache);
+                remoteTableMappingCache,
+                viewEndpointsEnabled);
     }
 }

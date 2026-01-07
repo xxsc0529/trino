@@ -28,6 +28,7 @@ import io.trino.metastore.HiveMetastore;
 import io.trino.metastore.HiveMetastoreFactory;
 import io.trino.operator.FlatHashStrategyCompiler;
 import io.trino.operator.GroupByHashPageIndexerFactory;
+import io.trino.operator.NullSafeHashCompiler;
 import io.trino.plugin.hive.metastore.HivePageSinkMetadata;
 import io.trino.spi.Page;
 import io.trino.spi.PageBuilder;
@@ -124,6 +125,10 @@ public class TestHivePageSink
             }
             if (format == HiveStorageFormat.ESRI) {
                 // ESRI format is readonly
+                continue;
+            }
+            if (format == HiveStorageFormat.SEQUENCEFILE_PROTOBUF) {
+                // SEQUENCEFILE_PROTOBUF format is readonly
                 continue;
             }
             config.setHiveStorageFormat(format);
@@ -390,8 +395,8 @@ public class TestHivePageSink
                 getDefaultHiveFileWriterFactories(config, fileSystemFactory),
                 HDFS_FILE_SYSTEM_FACTORY,
                 PAGE_SORTER,
-                HiveMetastoreFactory.ofInstance(metastore),
-                new GroupByHashPageIndexerFactory(new FlatHashStrategyCompiler(new TypeOperators())),
+                HiveMetastoreFactory.ofInstance(metastore, false),
+                new GroupByHashPageIndexerFactory(new FlatHashStrategyCompiler(new TypeOperators(), new NullSafeHashCompiler(new TypeOperators()))),
                 TESTING_TYPE_MANAGER,
                 config,
                 sortingFileWriterConfig,

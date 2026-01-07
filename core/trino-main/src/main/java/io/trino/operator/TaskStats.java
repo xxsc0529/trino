@@ -23,11 +23,11 @@ import jakarta.annotation.Nullable;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.collect.ImmutableList.toImmutableList;
+import static io.airlift.units.Duration.succinctDuration;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -73,9 +73,6 @@ public class TaskStats
     private final DataSize internalNetworkInputDataSize;
     private final long internalNetworkInputPositions;
 
-    private final DataSize rawInputDataSize;
-    private final long rawInputPositions;
-
     private final DataSize processedInputDataSize;
     private final long processedInputPositions;
 
@@ -88,7 +85,7 @@ public class TaskStats
 
     private final DataSize writerInputDataSize;
     private final DataSize physicalWrittenDataSize;
-    private final Optional<Integer> maxWriterCount;
+    private final OptionalInt maxWriterCount;
 
     private final int fullGcCount;
     private final Duration fullGcTime;
@@ -103,8 +100,8 @@ public class TaskStats
                 null,
                 null,
                 endTime,
-                new Duration(0, MILLISECONDS),
-                new Duration(0, MILLISECONDS),
+                succinctDuration(0, MILLISECONDS),
+                succinctDuration(0, MILLISECONDS),
                 0,
                 0,
                 0,
@@ -119,29 +116,27 @@ public class TaskStats
                 DataSize.ofBytes(0),
                 DataSize.ofBytes(0),
                 DataSize.ofBytes(0),
-                new Duration(0, MILLISECONDS),
-                new Duration(0, MILLISECONDS),
-                new Duration(0, MILLISECONDS),
+                succinctDuration(0, MILLISECONDS),
+                succinctDuration(0, MILLISECONDS),
+                succinctDuration(0, MILLISECONDS),
                 false,
                 ImmutableSet.of(),
                 DataSize.ofBytes(0),
                 0,
-                new Duration(0, MILLISECONDS),
+                succinctDuration(0, MILLISECONDS),
                 DataSize.ofBytes(0),
                 0,
                 DataSize.ofBytes(0),
                 0,
+                succinctDuration(0, MILLISECONDS),
                 DataSize.ofBytes(0),
                 0,
-                new Duration(0, MILLISECONDS),
+                succinctDuration(0, MILLISECONDS),
                 DataSize.ofBytes(0),
+                DataSize.ofBytes(0),
+                OptionalInt.empty(),
                 0,
-                new Duration(0, MILLISECONDS),
-                DataSize.ofBytes(0),
-                DataSize.ofBytes(0),
-                Optional.empty(),
-                0,
-                new Duration(0, MILLISECONDS),
+                succinctDuration(0, MILLISECONDS),
                 ImmutableList.of());
     }
 
@@ -186,9 +181,6 @@ public class TaskStats
             @JsonProperty("internalNetworkInputDataSize") DataSize internalNetworkInputDataSize,
             @JsonProperty("internalNetworkInputPositions") long internalNetworkInputPositions,
 
-            @JsonProperty("rawInputDataSize") DataSize rawInputDataSize,
-            @JsonProperty("rawInputPositions") long rawInputPositions,
-
             @JsonProperty("processedInputDataSize") DataSize processedInputDataSize,
             @JsonProperty("processedInputPositions") long processedInputPositions,
 
@@ -201,7 +193,7 @@ public class TaskStats
 
             @JsonProperty("writerInputDataSize") DataSize writerInputDataSize,
             @JsonProperty("physicalWrittenDataSize") DataSize physicalWrittenDataSize,
-            @JsonProperty("writerCount") Optional<Integer> writerCount,
+            @JsonProperty("writerCount") OptionalInt writerCount,
 
             @JsonProperty("fullGcCount") int fullGcCount,
             @JsonProperty("fullGcTime") Duration fullGcTime,
@@ -260,10 +252,6 @@ public class TaskStats
         this.internalNetworkInputDataSize = requireNonNull(internalNetworkInputDataSize, "internalNetworkInputDataSize is null");
         checkArgument(internalNetworkInputPositions >= 0, "internalNetworkInputPositions is negative");
         this.internalNetworkInputPositions = internalNetworkInputPositions;
-
-        this.rawInputDataSize = requireNonNull(rawInputDataSize, "rawInputDataSize is null");
-        checkArgument(rawInputPositions >= 0, "rawInputPositions is negative");
-        this.rawInputPositions = rawInputPositions;
 
         this.processedInputDataSize = requireNonNull(processedInputDataSize, "processedInputDataSize is null");
         checkArgument(processedInputPositions >= 0, "processedInputPositions is negative");
@@ -462,18 +450,6 @@ public class TaskStats
     }
 
     @JsonProperty
-    public DataSize getRawInputDataSize()
-    {
-        return rawInputDataSize;
-    }
-
-    @JsonProperty
-    public long getRawInputPositions()
-    {
-        return rawInputPositions;
-    }
-
-    @JsonProperty
     public DataSize getProcessedInputDataSize()
     {
         return processedInputDataSize;
@@ -522,7 +498,7 @@ public class TaskStats
     }
 
     @JsonProperty
-    public Optional<Integer> getMaxWriterCount()
+    public OptionalInt getMaxWriterCount()
     {
         return maxWriterCount;
     }
@@ -604,8 +580,6 @@ public class TaskStats
                 physicalInputReadTime,
                 internalNetworkInputDataSize,
                 internalNetworkInputPositions,
-                rawInputDataSize,
-                rawInputPositions,
                 processedInputDataSize,
                 processedInputPositions,
                 inputBlockedTime,
@@ -655,8 +629,6 @@ public class TaskStats
                 physicalInputReadTime,
                 internalNetworkInputDataSize,
                 internalNetworkInputPositions,
-                rawInputDataSize,
-                rawInputPositions,
                 processedInputDataSize,
                 processedInputPositions,
                 inputBlockedTime,
@@ -669,57 +641,6 @@ public class TaskStats
                 fullGcCount,
                 fullGcTime,
                 summarizePipelineStats(pipelines));
-    }
-
-    public TaskStats pruneDigests()
-    {
-        return new TaskStats(
-                createTime,
-                firstStartTime,
-                lastStartTime,
-                terminatingStartTime,
-                lastEndTime,
-                endTime,
-                elapsedTime,
-                queuedTime,
-                totalDrivers,
-                queuedDrivers,
-                queuedPartitionedDrivers,
-                queuedPartitionedSplitsWeight,
-                runningDrivers,
-                runningPartitionedDrivers,
-                runningPartitionedSplitsWeight,
-                blockedDrivers,
-                completedDrivers,
-                cumulativeUserMemory,
-                userMemoryReservation,
-                peakUserMemoryReservation,
-                revocableMemoryReservation,
-                spilledDataSize,
-                totalScheduledTime,
-                totalCpuTime,
-                totalBlockedTime,
-                fullyBlocked,
-                blockedReasons,
-                physicalInputDataSize,
-                physicalInputPositions,
-                physicalInputReadTime,
-                internalNetworkInputDataSize,
-                internalNetworkInputPositions,
-                rawInputDataSize,
-                rawInputPositions,
-                processedInputDataSize,
-                processedInputPositions,
-                inputBlockedTime,
-                outputDataSize,
-                outputPositions,
-                outputBlockedTime,
-                writerInputDataSize,
-                physicalWrittenDataSize,
-                maxWriterCount,
-                fullGcCount,
-                fullGcTime,
-                pipelines.stream().map(PipelineStats::pruneDigests).collect(toImmutableList()));
     }
 
     private static List<PipelineStats> summarizePipelineStats(List<PipelineStats> pipelines)

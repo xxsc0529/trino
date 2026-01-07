@@ -20,6 +20,7 @@ import io.trino.metadata.QualifiedObjectPrefix;
 import io.trino.metadata.QualifiedSchemaPrefix;
 import io.trino.metadata.QualifiedTablePrefix;
 import io.trino.metadata.SystemSecurityMetadata;
+import io.trino.spi.catalog.CatalogName;
 import io.trino.spi.connector.CatalogSchemaName;
 import io.trino.spi.connector.CatalogSchemaTableName;
 import io.trino.spi.connector.EntityKindAndName;
@@ -225,6 +226,24 @@ class TestingSystemSecurityMetadata
     }
 
     @Override
+    public void grantTableBranchPrivileges(Session session, QualifiedObjectName tableName, String branchName, Set<Privilege> privileges, TrinoPrincipal grantee, boolean grantOption)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void denyTableBranchPrivileges(Session session, QualifiedObjectName tableName, String branchName, Set<Privilege> privileges, TrinoPrincipal grantee)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void revokeTableBranchPrivileges(Session session, QualifiedObjectName tableName, String branchName, Set<Privilege> privileges, TrinoPrincipal grantee, boolean grantOption)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public Optional<TrinoPrincipal> getSchemaOwner(Session session, CatalogSchemaName schema)
     {
         return Optional.empty();
@@ -253,6 +272,12 @@ class TestingSystemSecurityMetadata
                                 .collect(toImmutableSet()))
                         .build());
     }
+
+    @Override
+    public void catalogCreated(Session session, CatalogName catalog) {}
+
+    @Override
+    public void catalogDropped(Session session, CatalogName catalog) {}
 
     @Override
     public void functionCreated(Session session, CatalogSchemaFunctionName function)

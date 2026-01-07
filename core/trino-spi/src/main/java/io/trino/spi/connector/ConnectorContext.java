@@ -24,11 +24,6 @@ import io.trino.spi.type.TypeManager;
 
 public interface ConnectorContext
 {
-    default CatalogHandle getCatalogHandle()
-    {
-        throw new UnsupportedOperationException();
-    }
-
     default OpenTelemetry getOpenTelemetry()
     {
         throw new UnsupportedOperationException();
@@ -41,8 +36,9 @@ public interface ConnectorContext
 
     default Node getCurrentNode()
     {
-        //noinspection deprecation
-        return getNodeManager().getCurrentNode();
+        @SuppressWarnings("deprecation")
+        Node currentNode = getNodeManager().getCurrentNode();
+        return currentNode;
     }
 
     default NodeManager getNodeManager()

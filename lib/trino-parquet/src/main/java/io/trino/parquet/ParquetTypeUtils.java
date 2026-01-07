@@ -39,7 +39,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.type.StandardTypes.JSON;
@@ -295,18 +294,17 @@ public final class ParquetTypeUtils
         int repetitionLevel = columnIO.getRepetitionLevel();
         int definitionLevel = columnIO.getDefinitionLevel();
         if (isVariantType(type, columnIO)) {
-            checkArgument(type.getTypeParameters().isEmpty(), "Expected type parameters to be empty for variant but got %s", type.getTypeParameters());
             if (!(columnIO instanceof GroupColumnIO groupColumnIo)) {
                 throw new IllegalStateException("Expected columnIO to be GroupColumnIO but got %s".formatted(columnIO.getClass().getSimpleName()));
             }
-            Field valueField = constructField(VARBINARY, groupColumnIo.getChild(0), false).orElseThrow();
+            PrimitiveField valueField = (PrimitiveField) constructField(VARBINARY, groupColumnIo.getChild(0), false).orElseThrow();
             PrimitiveField metadataField = (PrimitiveField) constructField(VARBINARY, groupColumnIo.getChild(1), false).orElseThrow();
             return Optional.of(new VariantField(
                     type,
                     repetitionLevel,
                     definitionLevel,
                     required,
-                    valueField,
+                    new PrimitiveField(valueField.getType(), false, valueField.getDescriptor(), valueField.getId()),
                     // Mark the metadata field as optional, this is because the metadata field is not present when the actual Variant value is null
                     new PrimitiveField(metadataField.getType(), false, metadataField.getDescriptor(), metadataField.getId())));
         }
@@ -372,7 +370,7 @@ public final class ParquetTypeUtils
 
     private static boolean isVariantType(Type type, ColumnIO columnIO)
     {
-        return type.getTypeSignature().getBase().equals(JSON) &&
+        return type.getBaseName().equals(JSON) &&
                 columnIO instanceof GroupColumnIO groupColumnIo &&
                 groupColumnIo.getChildrenCount() == 2 &&
                 groupColumnIo.getChild("value") != null &&

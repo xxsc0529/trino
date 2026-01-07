@@ -18,12 +18,12 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.trino.Session;
+import io.trino.connector.CatalogHandle;
 import io.trino.execution.warnings.WarningCollector;
 import io.trino.metadata.Metadata;
 import io.trino.metadata.QualifiedObjectName;
 import io.trino.metadata.TableHandle;
 import io.trino.security.AllowAllAccessControl;
-import io.trino.spi.connector.CatalogHandle;
 import io.trino.spi.connector.ColumnMetadata;
 import io.trino.spi.connector.ConnectorCapabilities;
 import io.trino.spi.connector.ConnectorTableMetadata;
@@ -454,7 +454,7 @@ public class TestAddColumnTask
 
         assertTrinoExceptionThrownBy(() -> getFutureValue(executeAddColumn(asQualifiedName(tableName), QualifiedName.of("col", "x", "c"), INTEGER, false, false)))
                 .hasErrorCode(COLUMN_NOT_FOUND)
-                .hasMessageContaining("Field 'x' does not exist within row(a row(b integer))");
+                .hasMessageContaining("Field 'x' does not exist within row(\"a\" row(\"b\" integer))");
     }
 
     @Test
@@ -505,7 +505,7 @@ public class TestAddColumnTask
 
         assertTrinoExceptionThrownBy(() -> getFutureValue(executeAddColumn(asQualifiedName(tableName), QualifiedName.of("col", "a", "c"), INTEGER, false, false)))
                 .hasErrorCode(NOT_SUPPORTED)
-                .hasMessage("Unsupported type: map(row(key integer), row(key integer))");
+                .hasMessage("Unsupported type: map(row(\"key\" integer), row(\"key\" integer))");
     }
 
     @Test
@@ -546,7 +546,7 @@ public class TestAddColumnTask
 
         assertTrinoExceptionThrownBy(() -> getFutureValue(executeAddColumn(asQualifiedName(tableName), QualifiedName.of("col", "a", "z"), INTEGER, false, false)))
                 .hasErrorCode(AMBIGUOUS_NAME)
-                .hasMessageContaining("Field path [a, z] within row(a row(x integer), A row(y integer)) is ambiguous");
+                .hasMessageContaining("Field path [a, z] within row(\"a\" row(\"x\" integer), \"A\" row(\"y\" integer)) is ambiguous");
         assertThat(metadata.getTableMetadata(testSession, table).columns())
                 .containsExactly(new ColumnMetadata("col", rowType(
                         new RowType.Field(Optional.of("a"), rowType(new RowType.Field(Optional.of("x"), INTEGER))),

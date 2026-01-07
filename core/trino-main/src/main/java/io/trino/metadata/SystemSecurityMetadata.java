@@ -14,6 +14,7 @@
 package io.trino.metadata;
 
 import io.trino.Session;
+import io.trino.spi.catalog.CatalogName;
 import io.trino.spi.connector.CatalogSchemaName;
 import io.trino.spi.connector.CatalogSchemaTableName;
 import io.trino.spi.connector.EntityKindAndName;
@@ -119,6 +120,21 @@ public interface SystemSecurityMetadata
      */
     Set<GrantInfo> listTablePrivileges(Session session, QualifiedTablePrefix prefix);
 
+    /**
+     * Grants the specified privilege to the specified user on the specified branch
+     */
+    void grantTableBranchPrivileges(Session session, QualifiedObjectName tableName, String branchName, Set<Privilege> privileges, TrinoPrincipal grantee, boolean grantOption);
+
+    /**
+     * Denies the specified privilege to the specified user on the specified branch
+     */
+    void denyTableBranchPrivileges(Session session, QualifiedObjectName tableName, String branchName, Set<Privilege> privileges, TrinoPrincipal grantee);
+
+    /**
+     * Revokes the specified privilege on the specified branch from the specified user
+     */
+    void revokeTableBranchPrivileges(Session session, QualifiedObjectName tableName, String branchName, Set<Privilege> privileges, TrinoPrincipal grantee, boolean grantOption);
+
     default Set<EntityPrivilege> getAllEntityKindPrivileges(String entityKind)
     {
         throw new UnsupportedOperationException();
@@ -171,6 +187,16 @@ public interface SystemSecurityMetadata
      * Get the identity to run the function as
      */
     Optional<Identity> getFunctionRunAsIdentity(Session session, CatalogSchemaFunctionName functionName);
+
+    /**
+     * A catalog was created
+     */
+    void catalogCreated(Session session, CatalogName catalog);
+
+    /**
+     * A catalog was dropped
+     */
+    void catalogDropped(Session session, CatalogName catalog);
 
     /**
      * A function is created

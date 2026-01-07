@@ -20,6 +20,7 @@ import io.trino.filesystem.Location;
 import io.trino.filesystem.TrinoFileSystem;
 import io.trino.filesystem.TrinoFileSystemFactory;
 import io.trino.filesystem.TrinoInputFile;
+import io.trino.filesystem.hdfs.HdfsFileSystemFactory;
 import io.trino.metastore.HiveMetastore;
 import io.trino.metastore.HiveMetastoreFactory;
 import io.trino.metastore.cache.CachingHiveMetastore;
@@ -46,13 +47,13 @@ import io.trino.plugin.iceberg.catalog.IcebergTableOperationsProvider;
 import io.trino.plugin.iceberg.catalog.TrinoCatalog;
 import io.trino.plugin.iceberg.catalog.file.FileMetastoreTableOperationsProvider;
 import io.trino.plugin.iceberg.catalog.hms.TrinoHiveCatalog;
+import io.trino.plugin.iceberg.fileio.ForwardingFileIoFactory;
 import io.trino.plugin.iceberg.fileio.ForwardingInputFile;
 import io.trino.spi.block.Block;
 import io.trino.spi.catalog.CatalogName;
 import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.SourcePage;
-import io.trino.spi.type.TestingTypeManager;
 import io.trino.spi.type.Type;
 import io.trino.testing.QueryRunner;
 import io.trino.testing.TestingConnectorSession;
@@ -72,15 +73,19 @@ import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.Iterators.getOnlyElement;
 import static com.google.common.collect.MoreCollectors.onlyElement;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
+import static com.google.common.util.concurrent.MoreExecutors.newDirectExecutorService;
 import static io.trino.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static io.trino.metastore.cache.CachingHiveMetastore.createPerTransactionCache;
 import static io.trino.orc.OrcReader.INITIAL_BATCH_SIZE;
+import static io.trino.plugin.hive.HiveTestUtils.HDFS_ENVIRONMENT;
+import static io.trino.plugin.hive.HiveTestUtils.HDFS_FILE_SYSTEM_STATS;
 import static io.trino.plugin.iceberg.IcebergQueryRunner.ICEBERG_CATALOG;
 import static io.trino.plugin.iceberg.IcebergUtil.loadIcebergTable;
 import static io.trino.plugin.iceberg.util.FileOperationUtils.FileType.METADATA_JSON;
 import static io.trino.plugin.iceberg.util.FileOperationUtils.FileType.fromFilePath;
 import static io.trino.spi.type.TypeUtils.readNativeValue;
 import static io.trino.spi.type.VarcharType.VARCHAR;
+import static io.trino.type.InternalTypeManager.TESTING_TYPE_MANAGER;
 import static org.joda.time.DateTimeZone.UTC;
 
 public final class IcebergTestUtils
@@ -93,6 +98,13 @@ public final class IcebergTestUtils
                     new ParquetReaderConfig(),
                     new ParquetWriterConfig()).getSessionProperties())
             .build();
+
+    public static final TableStatisticsReader TABLE_STATISTICS_READER = new TableStatisticsReader(
+            TESTING_TYPE_MANAGER,
+            newDirectExecutorService(),
+            new DefaultIcebergFileSystemFactory(new HdfsFileSystemFactory(HDFS_ENVIRONMENT, HDFS_FILE_SYSTEM_STATS)));
+
+    public static final ForwardingFileIoFactory FILE_IO_FACTORY = new ForwardingFileIoFactory(newDirectExecutorService());
 
     private IcebergTestUtils() {}
 
@@ -209,7 +221,7 @@ public final class IcebergTestUtils
             String catalogName,
             String schemaName)
     {
-        IcebergTableOperationsProvider tableOperationsProvider = new FileMetastoreTableOperationsProvider(fileSystemFactory);
+        IcebergTableOperationsProvider tableOperationsProvider = new FileMetastoreTableOperationsProvider(fileSystemFactory, FILE_IO_FACTORY);
         TrinoCatalog catalog = getTrinoCatalog(metastore, fileSystemFactory, catalogName);
         return loadIcebergTable(catalog, tableOperationsProvider, SESSION, new SchemaTableName(schemaName, tableName));
     }
@@ -219,14 +231,15 @@ public final class IcebergTestUtils
             TrinoFileSystemFactory fileSystemFactory,
             String catalogName)
     {
-        IcebergTableOperationsProvider tableOperationsProvider = new FileMetastoreTableOperationsProvider(fileSystemFactory);
+        IcebergTableOperationsProvider tableOperationsProvider = new FileMetastoreTableOperationsProvider(fileSystemFactory, FILE_IO_FACTORY);
         CachingHiveMetastore cachingHiveMetastore = createPerTransactionCache(metastore, 1000);
         return new TrinoHiveCatalog(
                 new CatalogName(catalogName),
                 cachingHiveMetastore,
                 new TrinoViewHiveMetastore(cachingHiveMetastore, false, "trino-version", "test"),
                 fileSystemFactory,
-                new TestingTypeManager(),
+                FILE_IO_FACTORY,
+                TESTING_TYPE_MANAGER,
                 tableOperationsProvider,
                 false,
                 false,
@@ -243,7 +256,7 @@ public final class IcebergTestUtils
         while (fileIterator.hasNext()) {
             FileEntry entry = fileIterator.next();
             if (fromFilePath(entry.location().path()) == METADATA_JSON) {
-                TableMetadata tableMetadata = TableMetadataParser.read(null, new ForwardingInputFile(trinoFileSystem.newInputFile(entry.location())));
+                TableMetadata tableMetadata = TableMetadataParser.read(new ForwardingInputFile(trinoFileSystem.newInputFile(entry.location())));
                 metadataFiles.put(entry.location().path(), tableMetadata.lastUpdatedMillis());
             }
         }
@@ -253,7 +266,7 @@ public final class IcebergTestUtils
     public static ParquetMetadata getParquetFileMetadata(TrinoInputFile inputFile)
     {
         try (TrinoParquetDataSource dataSource = new TrinoParquetDataSource(inputFile, ParquetReaderOptions.defaultOptions(), new FileFormatDataSourceStats())) {
-            return MetadataReader.readFooter(dataSource);
+            return MetadataReader.readFooter(dataSource, Optional.empty());
         }
         catch (IOException e) {
             throw new UncheckedIOException(e);

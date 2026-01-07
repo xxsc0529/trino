@@ -102,7 +102,6 @@ public class TestIcebergTrinoRestCatalogConnectorSmokeTest
                                 .put("iceberg.rest-catalog.uri", testServer.getBaseUrl().toString())
                                 .put("iceberg.register-table-procedure.enabled", "true")
                                 .put("iceberg.writer-sort-buffer-size", "1MB")
-                                .put("iceberg.allowed-extra-properties", "write.metadata.delete-after-commit.enabled,write.metadata.previous-versions-max")
                                 .buildOrThrow())
                 .setInitialTables(REQUIRED_TPCH_TABLES)
                 .build();
@@ -192,7 +191,7 @@ public class TestIcebergTrinoRestCatalogConnectorSmokeTest
     }
 
     @Override
-    protected void dropTableFromMetastore(String tableName)
+    protected void dropTableFromCatalog(String tableName)
     {
         backend.dropTable(toIdentifier(tableName), false);
     }
@@ -232,8 +231,7 @@ public class TestIcebergTrinoRestCatalogConnectorSmokeTest
                 .isInstanceOf(QueryFailedException.class)
                 .cause()
                 .hasMessageContaining("Failed to drop table")
-                .cause()
-                .hasMessageMatching("Server error: NotFoundException: Failed to open input stream for file: (.*)");
+                .hasNoCause();
     }
 
     @Test
